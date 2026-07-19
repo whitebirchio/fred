@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { loadAccounts, loadHouse, houseMonthly } from "@/lib/metrics";
+import { contributionFieldFor } from "@/lib/taxlots";
 import { CATEGORY_META } from "@/lib/categories";
 import { money, monthEnd, monthLabel } from "@/lib/format";
 import { Card, PageHeader } from "@/components/ui";
@@ -125,11 +126,14 @@ export default async function MonthlyPage({
                 accountName={account.name}
                 statementDate={target}
                 prevBalance={prevBalance}
+                contributionField={contributionFieldFor(account)}
                 defaults={
                   entry
                     ? {
                         balance: entry.balance,
-                        individualContributions: entry.individualContributions,
+                        contributionsPretax: entry.contributionsPretax,
+                        contributionsRoth: entry.contributionsRoth,
+                        contributionsAfterTax: entry.contributionsAfterTax,
                         employerContributions: entry.employerContributions,
                         transfersIn: entry.transfersIn,
                         withdrawals: entry.withdrawals,

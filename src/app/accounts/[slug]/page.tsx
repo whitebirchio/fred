@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
-import { loadAccounts } from "@/lib/metrics";
+import { individualTotal, loadAccounts } from "@/lib/metrics";
+import { contributionFieldFor } from "@/lib/taxlots";
 import { CATEGORY_META } from "@/lib/categories";
 import { money, monthEnd, monthLabel } from "@/lib/format";
 import { Card, PageHeader, StatTile } from "@/components/ui";
@@ -24,7 +25,7 @@ export default async function AccountPage({
   const prev = entries.at(-2);
   const totals = entries.reduce(
     (t, e) => ({
-      contributions: t.contributions + e.individualContributions + e.employerContributions,
+      contributions: t.contributions + individualTotal(e) + e.employerContributions,
       growth: t.growth + e.growth,
       withdrawals: t.withdrawals + e.withdrawals,
     }),
@@ -34,11 +35,11 @@ export default async function AccountPage({
   const series = entries.map((e) => ({
     date: e.statementDate,
     balance: e.balance,
-    contributions: e.individualContributions + e.employerContributions,
+    contributions: individualTotal(e) + e.employerContributions,
     growth: e.growth,
     withdrawals: -e.withdrawals,
     net:
-      e.individualContributions +
+      individualTotal(e) +
       e.employerContributions +
       e.transfersIn -
       e.withdrawals -
@@ -112,6 +113,7 @@ export default async function AccountPage({
           accountName={account.name}
           statementDate={nextDate}
           prevBalance={last?.balance ?? 0}
+          contributionField={contributionFieldFor(account)}
         />
       </Card>
 
@@ -136,7 +138,7 @@ export default async function AccountPage({
                 <tr key={e.id} className="border-t border-edge">
                   <td className="py-1.5 pr-2">{monthLabel(e.statementDate)}</td>
                   <td className="py-1.5 pr-2 text-right tabular-nums">
-                    {money(e.individualContributions, true)}
+                    {money(individualTotal(e), true)}
                   </td>
                   <td className="py-1.5 pr-2 text-right tabular-nums">
                     {money(e.employerContributions, true)}

@@ -6,6 +6,7 @@ import { db } from "@/db";
 import {
   accountEntries,
   accounts,
+  appConfig,
   paychecks,
   propertyPayments,
   propertyPaymentShares,
@@ -30,8 +31,12 @@ export async function upsertEntry(formData: FormData) {
     throw new Error("Missing account or statement date");
   }
   const balance = num(formData.get("balance"));
-  const individualContributions = num(formData.get("individualContributions"));
+  const contributionsPretax = num(formData.get("contributionsPretax"));
+  const contributionsRoth = num(formData.get("contributionsRoth"));
+  const contributionsAfterTax = num(formData.get("contributionsAfterTax"));
   const employerContributions = num(formData.get("employerContributions"));
+  const individualContributions =
+    contributionsPretax + contributionsRoth + contributionsAfterTax;
   const transfersIn = num(formData.get("transfersIn"));
   const withdrawals = num(formData.get("withdrawals"));
   const transfersOut = num(formData.get("transfersOut"));
@@ -66,7 +71,9 @@ export async function upsertEntry(formData: FormData) {
       accountId,
       statementDate,
       balance,
-      individualContributions,
+      contributionsPretax,
+      contributionsRoth,
+      contributionsAfterTax,
       employerContributions,
       transfersIn,
       growth,
@@ -78,7 +85,9 @@ export async function upsertEntry(formData: FormData) {
       target: [accountEntries.accountId, accountEntries.statementDate],
       set: {
         balance,
-        individualContributions,
+        contributionsPretax,
+        contributionsRoth,
+        contributionsAfterTax,
         employerContributions,
         transfersIn,
         growth,
@@ -176,6 +185,23 @@ export async function addPaycheck(formData: FormData) {
     bonus: num(formData.get("bonus")),
   });
   revalidatePath("/", "layout");
+}
+
+export async function savePlanAssumptions(formData: FormData) {
+  const value = {
+    annualSpending: num(formData.get("annualSpending")),
+    swr: num(formData.get("swr")),
+    expectedReal: num(formData.get("expectedReal")),
+    conservativeReal: num(formData.get("conservativeReal")),
+    optimisticReal: num(formData.get("optimisticReal")),
+    monthlySavings: num(formData.get("monthlySavings")),
+    pretaxTaxRate: num(formData.get("pretaxTaxRate")),
+  };
+  await db
+    .insert(appConfig)
+    .values({ key: "plan", value })
+    .onConflictDoUpdate({ target: appConfig.key, set: { value } });
+  revalidatePath("/plan");
 }
 
 export async function toggleAccountActive(formData: FormData) {

@@ -49,6 +49,7 @@ ACCOUNT_META = {
     "ally-checking": ("Ally - Checking", "cash", "taxable", "Ally", True),
     "lm-401k": ("LM 401(k)", "retirement", "traditional", "LM", True),
     "hs-401k": ("HS 401(k)", "retirement", "traditional", "HS", False),
+    # (401(k) accounts additionally carry taxLotGroup="401k" — see below)
     "lm-pension": ("LM Pension", "retirement", "pension", "LM", True),
     "vanguard-roth-ira": ("Vanguard - Roth IRA", "retirement", "roth", "Vanguard", True),
     "vanguard-traditional-ira": ("Vanguard - Traditional IRA", "retirement", "traditional", "Vanguard", True),
@@ -113,6 +114,9 @@ def extract_accounts():
             if c >= start + 7 and not h.startswith("http")
         }
         company_cols = [c for c, h in input_cols.items() if "Company" in h]
+        roth_cols = [c for c, h in input_cols.items() if "Roth" in h]
+        aftertax_cols = [c for c, h in input_cols.items() if "After Tax" in h]
+        mixed = bool(roth_cols or aftertax_cols)
 
         entries = []
         prev = [0.0] * 5  # netContrib, netTransfIn, netGrowth, netWithdraw, netTransfOut
@@ -127,6 +131,25 @@ def extract_accounts():
             employer = round(
                 sum(num(ws.cell(r, c).value) for c in company_cols), 2
             )
+            individual = round(delta[0] - employer, 2)
+            # Split individual contributions by tax character. Mixed accounts
+            # (401(k)s) have explicit Roth / After Tax columns and pretax is
+            # the residual (absorbs statement rounding); single-bucket
+            # accounts route the whole amount by the account's nature.
+            if mixed:
+                c_roth = round(
+                    sum(num(ws.cell(r, c).value) for c in roth_cols), 2
+                )
+                c_aftertax = round(
+                    sum(num(ws.cell(r, c).value) for c in aftertax_cols), 2
+                )
+                c_pretax = round(individual - c_roth - c_aftertax, 2)
+            elif tax == "roth":
+                c_roth, c_pretax, c_aftertax = individual, 0.0, 0.0
+            elif tax == "taxable":
+                c_aftertax, c_pretax, c_roth = individual, 0.0, 0.0
+            else:  # traditional, pension, hsa: pre-tax money in
+                c_pretax, c_roth, c_aftertax = individual, 0.0, 0.0
             detail = {}
             for c, h in {**input_cols, **extra_cols}.items():
                 v = ws.cell(r, c).value
@@ -135,7 +158,9 @@ def extract_accounts():
             entries.append(
                 {
                     "statementDate": iso(d),
-                    "individualContributions": round(delta[0] - employer, 2),
+                    "contributionsPretax": c_pretax,
+                    "contributionsRoth": c_roth,
+                    "contributionsAfterTax": c_aftertax,
                     "employerContributions": employer,
                     "transfersIn": delta[1],
                     "growth": delta[2],
@@ -156,6 +181,7 @@ def extract_accounts():
                 "owner": "scott",
                 "isActive": active,
                 "includeInNetWorth": True,
+                "taxLotGroup": "401k" if slug in ("lm-401k", "hs-401k") else None,
                 "sortOrder": order,
                 "entries": entries,
             }
@@ -194,7 +220,9 @@ def extract_accounts():
             entries.append(
                 {
                     "statementDate": iso(d),
-                    "individualContributions": val("Contributions"),
+                    "contributionsPretax": 0.0,
+                    "contributionsRoth": 0.0,
+                    "contributionsAfterTax": val("Contributions"),
                     "employerContributions": 0.0,
                     "transfersIn": val("Transfers In"),
                     "growth": val("Growth"),
@@ -214,6 +242,7 @@ def extract_accounts():
                 "owner": "scott",
                 "isActive": False,
                 "includeInNetWorth": False,
+                "taxLotGroup": None,
                 "sortOrder": 100 + order,
                 "entries": entries,
             }

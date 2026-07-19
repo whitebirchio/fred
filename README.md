@@ -37,6 +37,7 @@ reloads all tables, so don't re-run it after entering new data in the app.
 | Route | Purpose |
 |---|---|
 | `/` | Net worth, allocation, per-account balances |
+| `/plan` | FI projection (live assumptions) + tax-aware bucket breakdown |
 | `/savings` | Savings vs growth, monthly savings, annual YTD overlays, savings rate |
 | `/accounts`, `/accounts/[slug]` | Account list, per-account history + statement entry |
 | `/house` | Value/loan/equity, Scott–Kate split, payment ledger, valuation entry |

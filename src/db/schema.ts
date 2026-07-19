@@ -69,6 +69,12 @@ export const accounts = pgTable("accounts", {
   // The Finances workbook excludes some holdings (e.g. unvested RSUs, ESPP)
   // from the net-worth rollup while still tracking them.
   includeInNetWorth: boolean("include_in_net_worth").notNull().default(true),
+  // Accounts sharing a group are one plan lineage (e.g. the LM→HS→LM 401(k)
+  // rollover chain): the tax-lot engine merges their flows chronologically and
+  // treats intra-group transfers as internal. Group presence also marks the
+  // account as mixed-bucket (tax character varies per contribution rather
+  // than per account).
+  taxLotGroup: text("tax_lot_group"),
   sortOrder: integer("sort_order").notNull().default(0),
   notes: text("notes"),
 });
@@ -91,9 +97,15 @@ export const accountEntries = pgTable(
       .notNull()
       .references(() => accounts.id),
     statementDate: date("statement_date").notNull(),
-    individualContributions: money("individual_contributions")
-      .notNull()
-      .default(0),
+    // Individual contributions split by tax character — the dimension that
+    // makes Roth-vs-traditional analysis possible. Single-bucket accounts use
+    // the column matching their nature (Roth IRA → roth, Trad IRA → pretax,
+    // taxable brokerage → after-tax dollars); mixed accounts (401(k)s) split
+    // per statement. Employer money is its own source dimension (pre-tax by
+    // definition; bucket resolution happens in the tax-lot engine).
+    contributionsPretax: money("contributions_pretax").notNull().default(0),
+    contributionsRoth: money("contributions_roth").notNull().default(0),
+    contributionsAfterTax: money("contributions_after_tax").notNull().default(0),
     employerContributions: money("employer_contributions").notNull().default(0),
     transfersIn: money("transfers_in").notNull().default(0),
     growth: money("growth").notNull().default(0),

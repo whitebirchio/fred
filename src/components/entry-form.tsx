@@ -4,71 +4,98 @@ import { useMemo, useState, useTransition } from "react";
 import { upsertEntry } from "@/app/actions";
 import { money } from "@/lib/format";
 
-type Props = {
-  accountId: number;
-  accountName: string;
-  statementDate: string; // default month-end
-  prevBalance: number;
-  defaults?: Partial<Record<Field, number>>;
-  onSaved?: () => void;
-};
+type ContributionField =
+  | "contributionsPretax"
+  | "contributionsRoth"
+  | "contributionsAfterTax";
 
 type Field =
   | "balance"
-  | "individualContributions"
+  | ContributionField
   | "employerContributions"
   | "transfersIn"
   | "withdrawals"
   | "transfersOut";
 
-const FIELDS: { key: Field; label: string }[] = [
-  { key: "balance", label: "Statement balance" },
-  { key: "individualContributions", label: "Your contributions" },
-  { key: "employerContributions", label: "Employer contributions" },
-  { key: "transfersIn", label: "Transfers in" },
-  { key: "withdrawals", label: "Withdrawals" },
-  { key: "transfersOut", label: "Transfers out" },
-];
+type Props = {
+  accountId: number;
+  accountName: string;
+  statementDate: string; // default month-end
+  prevBalance: number;
+  // "mixed" (401(k)-style) shows all three tax-character fields; otherwise the
+  // single contribution input writes to the account's natural column.
+  contributionField: "mixed" | ContributionField;
+  defaults?: Partial<Record<Field, number>>;
+};
+
+const LABELS: Record<Field, string> = {
+  balance: "Statement balance",
+  contributionsPretax: "Pre-tax contributions",
+  contributionsRoth: "Roth contributions",
+  contributionsAfterTax: "After-tax contributions",
+  employerContributions: "Employer contributions",
+  transfersIn: "Transfers in",
+  withdrawals: "Withdrawals",
+  transfersOut: "Transfers out",
+};
 
 export function EntryForm({
   accountId,
   accountName,
   statementDate,
   prevBalance,
+  contributionField,
   defaults,
 }: Props) {
-  const [values, setValues] = useState<Record<Field, string>>({
-    balance: defaults?.balance?.toString() ?? "",
-    individualContributions: defaults?.individualContributions?.toString() ?? "0",
-    employerContributions: defaults?.employerContributions?.toString() ?? "0",
-    transfersIn: defaults?.transfersIn?.toString() ?? "0",
-    withdrawals: defaults?.withdrawals?.toString() ?? "0",
-    transfersOut: defaults?.transfersOut?.toString() ?? "0",
-  });
+  const fields: { key: Field; label: string }[] = [
+    { key: "balance", label: LABELS.balance },
+    ...(contributionField === "mixed"
+      ? ([
+          { key: "contributionsPretax", label: LABELS.contributionsPretax },
+          { key: "contributionsRoth", label: LABELS.contributionsRoth },
+          { key: "contributionsAfterTax", label: LABELS.contributionsAfterTax },
+        ] as const)
+      : ([{ key: contributionField, label: "Your contributions" }] as const)),
+    { key: "employerContributions", label: LABELS.employerContributions },
+    { key: "transfersIn", label: LABELS.transfersIn },
+    { key: "withdrawals", label: LABELS.withdrawals },
+    { key: "transfersOut", label: LABELS.transfersOut },
+  ];
+
+  const [values, setValues] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      fields.map((f) => [
+        f.key,
+        f.key === "balance"
+          ? (defaults?.balance?.toString() ?? "")
+          : (defaults?.[f.key]?.toString() ?? "0"),
+      ]),
+    ),
+  );
   const [date, setDate] = useState(statementDate);
   const [pending, startTransition] = useTransition();
   const [saved, setSaved] = useState(false);
 
-  const n = (k: Field) => {
-    const v = parseFloat(values[k].replace(/[$,]/g, ""));
+  const n = (k: string) => {
+    const v = parseFloat((values[k] ?? "0").replace(/[$,]/g, ""));
     return Number.isFinite(v) ? v : 0;
   };
 
-  const growth = useMemo(
-    () =>
+  const growth = useMemo(() => {
+    const inflows =
+      n("contributionsPretax") +
+      n("contributionsRoth") +
+      n("contributionsAfterTax") +
+      n("employerContributions") +
+      n("transfersIn");
+    return (
       Math.round(
-        (n("balance") -
-          prevBalance -
-          n("individualContributions") -
-          n("employerContributions") -
-          n("transfersIn") +
-          n("withdrawals") +
-          n("transfersOut")) *
+        (n("balance") - prevBalance - inflows + n("withdrawals") + n("transfersOut")) *
           100,
-      ) / 100,
+      ) / 100
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [values, prevBalance],
-  );
+  }, [values, prevBalance]);
 
   return (
     <form
@@ -94,7 +121,7 @@ export function EntryForm({
             required
           />
         </label>
-        {FIELDS.map((f) => (
+        {fields.map((f) => (
           <label key={f.key} className="block text-xs text-ink-2">
             {f.label}
             <input

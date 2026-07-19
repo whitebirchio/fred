@@ -37,6 +37,12 @@ export type AccountWithEntries = typeof accounts.$inferSelect & {
   entries: (typeof accountEntries.$inferSelect)[];
 };
 
+export type Entry = typeof accountEntries.$inferSelect;
+
+/** Individual (non-employer) contributions across the three tax characters. */
+export const individualTotal = (e: Entry): number =>
+  e.contributionsPretax + e.contributionsRoth + e.contributionsAfterTax;
+
 export type HouseMonth = {
   date: string;
   marketValue: number;
@@ -248,7 +254,7 @@ export function portfolioSeries(
       let i = cursors.get(a.id) ?? 0;
       while (i < a.entries.length && a.entries[i].statementDate <= end) {
         const e = a.entries[i];
-        flow.contributions += e.individualContributions + e.employerContributions;
+        flow.contributions += individualTotal(e) + e.employerContributions;
         flow.transfersIn += e.transfersIn;
         flow.growth += e.growth;
         flow.withdrawals += e.withdrawals;

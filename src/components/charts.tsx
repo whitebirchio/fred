@@ -63,7 +63,7 @@ type TooltipPayload = {
 
 // Passed to recharts as `content={<ChartTooltip … />}`; recharts clones the
 // element and injects active/payload/label at hover time.
-function ChartTooltip({
+export function ChartTooltip({
   active,
   payload,
   label,

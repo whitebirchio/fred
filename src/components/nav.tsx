@@ -6,6 +6,7 @@ import { NavLink } from "./ui";
 
 const LINKS = [
   { href: "/", label: "Overview" },
+  { href: "/plan", label: "Plan" },
   { href: "/savings", label: "Savings" },
   { href: "/accounts", label: "Accounts" },
   { href: "/house", label: "House" },

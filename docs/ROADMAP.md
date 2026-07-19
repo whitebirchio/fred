@@ -3,12 +3,17 @@
 The spreadsheets answer *"what happened to my accounts?"* An advisor asks
 three more questions: *"are you on track?"*, *"are you efficient?"*, and
 *"what would change the outcome?"* This document maps those questions onto
-data Fred already has, data Monarch has, and what to build. Nothing here is
-implemented yet; it's the prioritized thinking.
+data Fred already has, data Monarch has, and what to build. Items are marked
+as they ship (1.1 v1 and the 1.2 data model are done).
 
 ## Part 1 — Advisor-grade analyses on data Fred already has
 
 ### 1.1 Financial independence projection (the marquee feature)
+**Status: v1 shipped (2026-07-19)** as `/plan` — FI target from spending ÷ SWR,
+live-adjustable assumptions persisted to app config, three deterministic
+return scenarios, coast-FI date, spendable (after-tax) framing. Future: Monte
+Carlo bands, retirement-age anchoring, spending inferred from Monarch.
+
 The Analysis sheet had rows pre-dated through 2033 — the appetite for
 projection is already there; the sheet just never computed it. Fred has the
 three inputs an advisor needs: net-worth level, monthly savings cadence, and
@@ -59,12 +64,14 @@ What's still genuinely useful to build here (optimization, not rescue):
 - After-Tax 401(k) column → mega-backdoor Roth tracking if/when the plan
   allows in-plan conversion.
 
-**Data-model implication:** to support any of this, tax treatment must move
-from a per-account enum to a per-contribution dimension. The monthly
-`account_entries.detail` JSONB already preserves the Roth/Traditional/
-After-Tax/Company breakdown from the import, so the history is there — a
-`tax_lots` view (or derived columns) can be computed from it without
-re-importing. This is a prerequisite for 1.1's after-tax FI projection too.
+**Data-model implication — implemented (2026-07-19):** tax treatment is now a
+per-contribution dimension: `account_entries` carries
+`contributions_pretax` / `contributions_roth` / `contributions_after_tax`
+(plus employer), and `accounts.tax_lot_group` marks plan lineages (LM+HS
+401(k)) whose intra-group rollovers are internal. `src/lib/taxlots.ts`
+simulates monthly tax lots (proportional growth allocation, rescaled to tie
+out to statement balances, residuals surfaced as drift) and powers the
+`/plan` page's bucket views and the after-tax FI projection.
 
 ### 1.3 Honest savings-rate triangulation
 The sheet metric (savings ÷ contributions) measures retention of money that

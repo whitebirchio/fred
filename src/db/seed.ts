@@ -23,7 +23,9 @@ function load<T>(name: string): T {
 
 type SeedEntry = {
   statementDate: string;
-  individualContributions: number;
+  contributionsPretax: number;
+  contributionsRoth: number;
+  contributionsAfterTax: number;
   employerContributions: number;
   transfersIn: number;
   growth: number;
@@ -42,6 +44,7 @@ type SeedAccount = {
   owner: string;
   isActive: boolean;
   includeInNetWorth: boolean;
+  taxLotGroup: string | null;
   sortOrder: number;
   entries: SeedEntry[];
 };
@@ -133,13 +136,16 @@ async function main() {
         ownershipShare: 1,
         isActive: a.isActive,
         includeInNetWorth: a.includeInNetWorth,
+        taxLotGroup: a.taxLotGroup,
         sortOrder: a.sortOrder,
       })
       .returning();
     const rows = a.entries.map((e) => ({
       accountId: row.id,
       statementDate: e.statementDate,
-      individualContributions: e.individualContributions,
+      contributionsPretax: e.contributionsPretax,
+      contributionsRoth: e.contributionsRoth,
+      contributionsAfterTax: e.contributionsAfterTax,
       employerContributions: e.employerContributions,
       transfersIn: e.transfersIn,
       growth: e.growth,

@@ -24,7 +24,8 @@ Banked 2026-07-19 so they don't get lost. Revisit as needed.
 5. **Crypto price automation** — auto-fill BTC/ETH growth from live prices
    (e.g. a public price API) instead of manual growth entry?
 
-6. **Initial git commit** — everything is staged; waiting for the word.
+6. **Initial git commit** — ✅ done (`6d83a8a`, 2026-07-19). No remote yet;
+   nothing pushed.
 
 7. **Hosting** — ✅ decided: Cloudflare Workers via @opennextjs/cloudflare
    (see `docs/DEPLOY.md` for the manual steps). Cloudflare Access will gate

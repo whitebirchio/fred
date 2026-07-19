@@ -1,0 +1,2 @@
+NEXTJS_ENV=development
+# DATABASE_URL=postgres://... (Neon pooled string, for wrangler preview against Neon)

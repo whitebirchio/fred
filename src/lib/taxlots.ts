@@ -115,7 +115,12 @@ function monthGrid(accts: AccountWithEntries[]): MonthKey[] {
   const [ly, lm] = [Number(max.slice(0, 4)), Number(max.slice(5, 7))];
   while (y < ly || (y === ly && m <= lm)) {
     grid.push(monthEnd(y, m));
-    m === 12 ? (y++, (m = 1)) : m++;
+    if (m === 12) {
+      y++;
+      m = 1;
+    } else {
+      m++;
+    }
   }
   return grid;
 }

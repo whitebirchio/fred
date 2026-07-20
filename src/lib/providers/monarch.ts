@@ -58,6 +58,10 @@ type GqlAccount = {
 export class MonarchProvider implements SyncProvider {
   readonly name = "monarch";
   private token = process.env.MONARCH_TOKEN ?? "";
+  // A stable device id the API's abuse layer expects. Any UUID works; set
+  // MONARCH_DEVICE_UUID to reuse the one your login minted the token with.
+  private deviceUuid =
+    process.env.MONARCH_DEVICE_UUID ?? "00000000-0000-4000-8000-000000000000";
 
   isConfigured(): boolean {
     return this.token.length > 0;
@@ -68,12 +72,18 @@ export class MonarchProvider implements SyncProvider {
     query: string,
     variables: Record<string, unknown> = {},
   ): Promise<T> {
+    // Token auth (not the web app's cookie+CSRF): API clients send
+    // `Authorization: Token …`. The device-uuid and monarch-client headers
+    // mirror the real client so the request isn't rejected as non-browser
+    // traffic; no x-csrftoken is needed because token auth isn't CSRF-guarded.
     const res = await fetch(GRAPHQL_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Token ${this.token}`,
         "Client-Platform": "web",
+        "device-uuid": this.deviceUuid,
+        "monarch-client": "monarch-core-web-app-graphql",
         Origin: "https://app.monarch.com",
         Referer: "https://app.monarch.com/",
         "User-Agent":
@@ -84,7 +94,7 @@ export class MonarchProvider implements SyncProvider {
     if (!res.ok) {
       const hint =
         res.status === 401 || res.status === 403
-          ? " (token missing/expired/rejected — re-extract MONARCH_TOKEN per docs/SYNC.md)"
+          ? " (token missing/expired/rejected — mint a fresh MONARCH_TOKEN with `npm run monarch:login`, see docs/SYNC.md)"
           : "";
       throw new Error(`Monarch ${operationName} failed: HTTP ${res.status}${hint}`);
     }

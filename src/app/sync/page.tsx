@@ -81,11 +81,21 @@ export default async function SyncPage() {
             lastRun
               ? lastRun.status === "success"
                 ? "✓ success"
-                : lastRun.status
+                : lastRun.status === "partial"
+                  ? "⚠ partial"
+                  : lastRun.status
               : "never"
           }
           sub={lastRun?.finishedAt?.slice(0, 16).replace("T", " ")}
-          deltaGood={lastRun ? lastRun.status === "success" : undefined}
+          deltaGood={
+            lastRun
+              ? lastRun.status === "success"
+                ? true
+                : lastRun.status === "error"
+                  ? false
+                  : undefined
+              : undefined
+          }
         />
         <StatTile
           label="External accounts"
@@ -102,6 +112,21 @@ export default async function SyncPage() {
       {lastRun?.status === "error" && (
         <Card>
           <p className="text-sm text-bad">Last sync failed: {lastRun.error}</p>
+        </Card>
+      )}
+
+      {lastRun?.status === "partial" && (
+        <Card>
+          <p className="text-sm text-ink-2">
+            <span className="font-medium text-ink">Partial sync.</span> Accounts
+            and balances synced, but some data didn&apos;t: {lastRun.error}
+          </p>
+          <p className="mt-2 text-xs text-ink-3">
+            Monarch has no official API, so an operation can drift without
+            notice — the rest of the sync is unaffected and everything already
+            pulled is still current. The fix lives in one place:{" "}
+            <code className="text-ink-2">src/lib/providers/monarch.ts</code>.
+          </p>
         </Card>
       )}
 
@@ -249,8 +274,16 @@ export default async function SyncPage() {
                 <td className="py-1.5 pr-2 text-xs text-ink-3">
                   {r.finishedAt?.slice(0, 19).replace("T", " ") ?? "—"}
                 </td>
+                {/* A partial run carries both stats and warnings — show both,
+                    otherwise the reason for the partial is invisible here. */}
                 <td className="py-1.5 text-xs text-ink-3">
-                  {r.stats ? JSON.stringify(r.stats) : (r.error ?? "—")}
+                  {r.stats != null && <span>{JSON.stringify(r.stats)}</span>}
+                  {r.error && (
+                    <span className={r.stats ? "block text-bad" : "text-bad"}>
+                      {r.error}
+                    </span>
+                  )}
+                  {!r.stats && !r.error && "—"}
                 </td>
               </tr>
             ))}

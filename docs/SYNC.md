@@ -67,6 +67,39 @@ escape hatch only — application logic never reads it.
 - Transactions/holdings exist only on the synced side — pure addition (the
   future spending analytics per docs/ROADMAP.md Part 2).
 
+## When a Monarch operation drifts
+
+Monarch's API is unofficial, so an operation can start returning HTTP 400
+without notice. The engine is built to survive that: **accounts are fatal**
+(everything else keys off them), but **transactions and holdings each degrade
+independently** — a broken one records a warning, leaves the rest of the sync
+intact, and marks the run `partial` (surfaced on `/sync`) rather than
+discarding a good pull. `scripts/verify_sync_partial.ts` guards that behavior.
+
+To diagnose and fix drift:
+
+1. `npm run monarch:probe` — read-only; exercises each operation against the
+   live API and reports which one broke, without touching the database.
+2. Compare the failing query in `src/lib/providers/monarch.ts` against what
+   the real web app sends: open app.monarch.com with DevTools → Network,
+   filter `graphql`, and read the `postData` of the matching operation (or
+   export a HAR). The web app's own query is ground truth for field names and
+   argument placement.
+3. Fix the query in that one file and re-probe.
+
+Two real examples, both HTTP 400, both fixed this way:
+
+- **Transactions**: pagination args were passed to `allTransactions(...)`,
+  but the schema only accepts them on the nested `results(...)` field — plus
+  an invented `search: ""` filter key that doesn't exist.
+- **Holdings**: `account { id }` was selected on the aggregate node, but
+  `aggregateHoldings` groups a security *across* accounts, so the account
+  lives on the nested per-account `holdings` rows. Those rows also carry
+  their own `quantity`/`value`, which is what makes per-account attribution
+  correct when a security is held in more than one account.
+
+`npm run sync:state` prints current row counts and recent run statuses.
+
 ## Idempotency guarantees
 
 `scripts/verify_sync.ts` runs two consecutive syncs and asserts convergence

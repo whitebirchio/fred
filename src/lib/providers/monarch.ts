@@ -171,12 +171,19 @@ export class MonarchProvider implements SyncProvider {
     const out: ProviderTransaction[] = [];
     const limit = 100;
     for (let offset = 0; offset < 5000; offset += limit) {
+      // Shape mirrors the web app's own Common_GetTransactionsListDashboard
+      // operation (captured from a live session). Two details matter and both
+      // return HTTP 400 if got wrong: pagination args belong ONLY on the
+      // nested `results(...)` field — `allTransactions` itself takes just
+      // `filters` — and the filter object accepts only real
+      // TransactionFilterInput keys (startDate/endDate/transactionVisibility;
+      // an invented `search: ""` is rejected).
       const data = await this.gql<{
         allTransactions: { totalCount: number; results: Row[] };
       }>(
         "GetTransactionsList",
         `query GetTransactionsList($offset: Int, $limit: Int, $filters: TransactionFilterInput) {
-          allTransactions(offset: $offset, limit: $limit, filters: $filters) {
+          allTransactions(filters: $filters) {
             totalCount
             results(offset: $offset, limit: $limit) {
               id
@@ -188,10 +195,19 @@ export class MonarchProvider implements SyncProvider {
               category { name group { name } }
               account { id }
               tags { name }
+              __typename
             }
+            __typename
           }
         }`,
-        { offset, limit, filters: { startDate: sinceISO, search: "" } },
+        {
+          offset,
+          limit,
+          filters: {
+            startDate: sinceISO,
+            transactionVisibility: "non_hidden_transactions_only",
+          },
+        },
       );
       const rows = data.allTransactions.results;
       for (const r of rows) {
@@ -216,11 +232,28 @@ export class MonarchProvider implements SyncProvider {
   async fetchHoldings(accountExternalIds: string[]): Promise<ProviderHolding[]> {
     // Holdings shapes drift the most; failure here must not sink a sync.
     try {
+      // `aggregateHoldings` groups one security across accounts, so the
+      // account lives on the nested per-account `holdings` rows — not on the
+      // aggregate node itself (selecting `account` there is what previously
+      // returned HTTP 400). Each nested row carries its own quantity/value,
+      // so flattening them attributes positions to the right account instead
+      // of dumping an aggregate onto whichever account happened to be first
+      // — which matters here: some securities really are held in more than
+      // one account.
       type Node = {
-        quantity: number | null;
-        totalValue: number | null;
-        security: { ticker: string | null; name: string; currentPrice: number | null } | null;
-        account: { id: string } | null;
+        security: {
+          ticker: string | null;
+          name: string | null;
+          currentPrice: number | null;
+        } | null;
+        holdings:
+          | {
+              id: string;
+              quantity: number | null;
+              value: number | null;
+              account: { id: string } | null;
+            }[]
+          | null;
       };
       const data = await this.gql<{
         portfolio: { aggregateHoldings: { edges: { node: Node }[] } };
@@ -231,27 +264,42 @@ export class MonarchProvider implements SyncProvider {
             aggregateHoldings {
               edges {
                 node {
-                  quantity
-                  totalValue
                   security { ticker name currentPrice }
-                  account { id }
+                  holdings {
+                    id
+                    quantity
+                    value
+                    account { id }
+                  }
+                  __typename
                 }
+                __typename
               }
+              __typename
             }
+            __typename
           }
         }`,
-        { input: { accountIds: accountExternalIds } },
+        { input: {} },
       );
-      return data.portfolio.aggregateHoldings.edges
-        .map(({ node }) => ({
-          accountExternalId: node.account?.id ?? "",
-          ticker: node.security?.ticker ?? null,
-          name: node.security?.name ?? node.security?.ticker ?? "Unknown",
-          quantity: node.quantity,
-          price: node.security?.currentPrice ?? null,
-          value: node.totalValue ?? 0,
-        }))
-        .filter((h) => h.accountExternalId !== "");
+
+      const wanted = new Set(accountExternalIds);
+      const out: ProviderHolding[] = [];
+      for (const { node } of data.portfolio.aggregateHoldings.edges) {
+        for (const h of node.holdings ?? []) {
+          const accountId = h.account?.id;
+          if (!accountId || !wanted.has(accountId)) continue;
+          out.push({
+            accountExternalId: accountId,
+            ticker: node.security?.ticker ?? null,
+            name: node.security?.name ?? node.security?.ticker ?? "Unknown",
+            quantity: h.quantity,
+            price: node.security?.currentPrice ?? null,
+            value: h.value ?? 0,
+          });
+        }
+      }
+      return out;
     } catch (err) {
       console.warn("Monarch holdings fetch failed (non-fatal):", err);
       return [];

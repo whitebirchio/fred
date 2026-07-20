@@ -66,14 +66,26 @@ export type SyncStats = {
 
 export async function runSync(provider: SyncProvider): Promise<{
   runId: number;
-  status: "success" | "error";
+  status: "success" | "partial" | "error";
   stats?: SyncStats;
+  warnings?: string[];
   error?: string;
 }> {
   const [run] = await db
     .insert(syncRuns)
     .values({ provider: provider.name, status: "running" })
     .returning();
+
+  // Against an unofficial API any single operation can drift out from under
+  // us at any time. Accounts are load-bearing (everything else is keyed to
+  // them, so a failure there is fatal), but transactions and holdings each
+  // degrade independently: a broken query there records a warning and leaves
+  // the rest of the sync intact rather than discarding a good account/
+  // snapshot pull. The run is then marked "partial" so the failure is still
+  // visible on /sync rather than silently swallowed.
+  const warnings: string[] = [];
+  const asMessage = (err: unknown) =>
+    err instanceof Error ? err.message : String(err);
 
   try {
     const stats: SyncStats = {
@@ -199,7 +211,12 @@ export async function runSync(provider: SyncProvider): Promise<{
       d.setUTCFullYear(d.getUTCFullYear() - 2);
       since = d.toISOString().slice(0, 10);
     }
-    const txs = await provider.fetchTransactions(since);
+    let txs: Awaited<ReturnType<typeof provider.fetchTransactions>> = [];
+    try {
+      txs = await provider.fetchTransactions(since);
+    } catch (err) {
+      warnings.push(`transactions: ${asMessage(err)}`);
+    }
     for (const t of txs) {
       const accountRowId = extIdToRowId.get(t.accountExternalId);
       if (!accountRowId) continue; // transaction for an account we don't know
@@ -243,7 +260,12 @@ export async function runSync(provider: SyncProvider): Promise<{
       .map((pa) => pa.externalId);
     if (investmentIds.length) {
       const asOf = new Date().toISOString().slice(0, 10);
-      const rows = await provider.fetchHoldings(investmentIds);
+      let rows: Awaited<ReturnType<typeof provider.fetchHoldings>> = [];
+      try {
+        rows = await provider.fetchHoldings(investmentIds);
+      } catch (err) {
+        warnings.push(`holdings: ${asMessage(err)}`);
+      }
       for (const h of rows) {
         const accountRowId = extIdToRowId.get(h.accountExternalId);
         if (!accountRowId) continue;
@@ -271,19 +293,30 @@ export async function runSync(provider: SyncProvider): Promise<{
       }
     }
 
+    const status = warnings.length ? "partial" : "success";
     await db
       .update(syncRuns)
-      .set({ status: "success", finishedAt: new Date().toISOString(), stats })
+      .set({
+        status,
+        finishedAt: new Date().toISOString(),
+        stats,
+        error: warnings.length ? warnings.join("; ") : null,
+      })
       .where(eq(syncRuns.id, run.id));
-    return { runId: run.id, status: "success", stats };
+    return {
+      runId: run.id,
+      status,
+      stats,
+      ...(warnings.length ? { warnings } : {}),
+    };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = asMessage(err);
     await db
       .update(syncRuns)
       .set({
         status: "error",
         finishedAt: new Date().toISOString(),
-        error: message,
+        error: [message, ...warnings].join("; "),
       })
       .where(eq(syncRuns.id, run.id));
     return { runId: run.id, status: "error", error: message };

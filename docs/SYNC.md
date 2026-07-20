@@ -77,13 +77,51 @@ cleanup pass can use it later).
 
 ## Getting a Monarch token
 
-Monarch has no API keys. The community-standard approach: log in once with
-the [`monarchmoney` Python library](https://github.com/hammem/monarchmoney)
-(supports MFA) and save the session token, or copy the `Token` from the web
-app's requests. Set it as:
+Monarch has no API keys, so there's no dashboard to visit — the token is the
+session credential the web app itself uses, which you copy out once.
+
+**Easiest path — browser DevTools (no Python, sidesteps MFA/CAPTCHA entirely
+since you're just using the normal website):**
+
+1. Go to [app.monarch.com](https://app.monarch.com) and log in as you
+   normally would.
+2. Open DevTools (`Cmd+Option+I` on Mac, `F12` elsewhere) → **Network** tab.
+3. Click **Accounts** in the Monarch sidebar (or reload the page) to trigger
+   some API calls.
+4. Filter the Network tab for `graphql`, click any one of those POST
+   requests, open its **Headers**, and find the request header
+   `Authorization: Token xxxxxxxxxxxxxxxxxxxxxxxxxxxx`.
+5. Copy everything **after** `Token ` — that string is `MONARCH_TOKEN`. Don't
+   include the word `Token` or the leading space.
+
+Set it as:
 
 - local: `MONARCH_TOKEN=…` in `.env`
 - deployed: `npx wrangler secret put MONARCH_TOKEN`
 
-Then `/sync` → **Sync now**. A nightly Cloudflare cron trigger can automate
-this later (free tier).
+Then `/sync` → **Sync now**.
+
+**Caveats:**
+- This is a live session token, not an API key — it can expire (browser-
+  extracted tokens are the shortest-lived of the available methods). If
+  syncs start failing with `HTTP 401`/`403`, just repeat the steps above for
+  a fresh one.
+- Monarch's API host moved from `api.monarchmoney.com` to `api.monarch.com`
+  at some point — `src/lib/providers/monarch.ts` already points at the
+  current host, but if Monarch moves it again, that's the one line to check.
+- For a longer-lived token, the community
+  [`monarchmoney` Python library](https://github.com/hammem/monarchmoney) (or
+  its more actively maintained forks,
+  [`monarchmoneycommunity`](https://github.com/bradleyseanf/monarchmoneycommunity)
+  and [`monarchmoney-enhanced`](https://github.com/keithah/monarchmoney-enhanced))
+  supports a proper `interactive_login()` flow with MFA and session
+  persistence — worth switching to if browser tokens expire too often to be
+  worth the manual refresh. There's also a TypeScript port,
+  [`monarchmoney-ts`](https://github.com/keithah/monarchmoney-ts) (npm
+  package `monarchmoney`), which would fit Fred's stack directly if it's ever
+  worth adding as a scripted login helper instead of the manual DevTools
+  copy.
+
+A nightly Cloudflare cron trigger can automate the sync call later (free
+tier) — it can't automate re-obtaining the token itself, since that step
+requires your login.

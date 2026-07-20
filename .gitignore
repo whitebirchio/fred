@@ -49,3 +49,6 @@ next-env.d.ts
 .dev.vars
 cloudflare-env.d.ts
 !.env.example
+
+# stray Python clone if present locally (not part of the Fred app)
+/src/monarchmoney/

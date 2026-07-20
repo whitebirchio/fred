@@ -15,11 +15,17 @@ import type {
 // each fetch degrades independently, and the rest of Fred only ever sees
 // normalized shapes.
 //
-// Auth: a long-lived session token in the MONARCH_TOKEN env var (the same
-// token the community MCP servers use). Obtain via the monarchmoney Python
-// library's login flow, or from the web app's session. Never logged.
+// Auth: a session token in the MONARCH_TOKEN env var — the raw value of the
+// `Authorization: Token <this>` header the web app sends, either lifted from
+// its Network tab or obtained via a community library's login flow. Never
+// logged. See docs/SYNC.md for the step-by-step.
+//
+// Monarch migrated its API host from api.monarchmoney.com to api.monarch.com
+// (observed July 2026); community forks that still point at the old host
+// fail outright, so this is worth double-checking first if requests start
+// erroring after a long gap between syncs.
 
-const GRAPHQL_URL = "https://api.monarchmoney.com/graphql";
+const GRAPHQL_URL = "https://api.monarch.com/graphql";
 
 const TYPE_MAP: Record<string, { type: string; isAsset: boolean }> = {
   depository: { type: "checking", isAsset: true },
@@ -68,11 +74,19 @@ export class MonarchProvider implements SyncProvider {
         "Content-Type": "application/json",
         Authorization: `Token ${this.token}`,
         "Client-Platform": "web",
+        Origin: "https://app.monarch.com",
+        Referer: "https://app.monarch.com/",
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
       },
       body: JSON.stringify({ operationName, query, variables }),
     });
     if (!res.ok) {
-      throw new Error(`Monarch ${operationName} failed: HTTP ${res.status}`);
+      const hint =
+        res.status === 401 || res.status === 403
+          ? " (token missing/expired/rejected — re-extract MONARCH_TOKEN per docs/SYNC.md)"
+          : "";
+      throw new Error(`Monarch ${operationName} failed: HTTP ${res.status}${hint}`);
     }
     const body = (await res.json()) as { data?: T; errors?: { message: string }[] };
     if (body.errors?.length) {

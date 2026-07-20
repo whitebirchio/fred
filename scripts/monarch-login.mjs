@@ -16,40 +16,51 @@
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { randomUUID } from "node:crypto";
+import { Writable } from "node:stream";
 
 const LOGIN_URL = "https://api.monarch.com/auth/login/";
 
-const rl = createInterface({ input: stdin, output: stdout });
+// A stdout wrapper that can suppress echo on demand — the standard technique
+// Node CLI tools (npm, yarn, inquirer) use for password masking, since
+// readline has no public "hide input" option. Unlike toggling
+// stdin.setRawMode()/pause()/resume() by hand (an earlier version of this
+// script did that), this never touches raw mode itself — readline keeps
+// managing that consistently for the interface's entire lifetime. Toggling
+// raw mode manually mid-script left readline desynced afterward, so the
+// *next* rl.question() call (for the MFA code) silently never resolved and
+// the process exited once the event loop drained, with zero visible output.
+// This approach was verified over a real pty (via `expect`): password stays
+// masked and the following MFA prompt fires correctly.
+let muted = false;
+const maskedStdout = new Writable({
+  write(chunk, encoding, callback) {
+    if (!muted) stdout.write(chunk);
+    callback();
+  },
+});
 
-// Minimal hidden input for the password (mutes echo while typing).
-function secret(question) {
+// Masking only makes sense against a real terminal; forcing terminal-style
+// handling onto piped/non-interactive input would fight readline's own
+// detection, so fall back to plain visible input there.
+const isInteractive = Boolean(stdin.isTTY);
+const rl = createInterface({
+  input: stdin,
+  output: isInteractive ? maskedStdout : stdout,
+  terminal: isInteractive,
+});
+
+async function secret(question) {
+  if (!isInteractive) return rl.question(question);
   stdout.write(question);
-  return new Promise((resolve) => {
-    let buf = "";
-    const onData = (char) => {
-      const s = char.toString("utf8");
-      if (s === "\n" || s === "\r" || s === "") {
-        // Enter / Ctrl-D
-        stdin.removeListener("data", onData);
-        stdin.setRawMode?.(false);
-        stdin.pause();
-        stdout.write("\n");
-        resolve(buf);
-      } else if (s === "") {
-        // Ctrl-C
-        stdout.write("\n");
-        process.exit(1);
-      } else if (s === "" || s === "\b") {
-        // backspace / DEL
-        buf = buf.slice(0, -1);
-      } else {
-        buf += s;
-      }
-    };
-    stdin.setRawMode?.(true);
-    stdin.resume();
-    stdin.on("data", onData);
-  });
+  muted = true;
+  let answer;
+  try {
+    answer = await rl.question("");
+  } finally {
+    muted = false;
+  }
+  stdout.write("\n");
+  return answer;
 }
 
 const deviceUuid = randomUUID();
@@ -102,6 +113,7 @@ async function main() {
   let { status, json } = await attempt(base);
 
   if (!json?.token && looksLikeMfa(status, json)) {
+    stdout.write("\nMFA required.\n");
     const code = await rl.question(
       "Multi-factor code (authenticator app or emailed code): ",
     );

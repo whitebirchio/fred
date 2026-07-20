@@ -47,7 +47,8 @@ reloads all tables, so don't re-run it after entering new data in the app.
 
 Metric definitions and the source-spreadsheet mapping live in
 [docs/ANALYSIS.md](docs/ANALYSIS.md); the external-sync architecture (provider
-abstraction, dedup rules, idempotency) in [docs/SYNC.md](docs/SYNC.md). Deployment (Neon + Cloudflare Workers via
+abstraction, dedup rules, idempotency) in [docs/SYNC.md](docs/SYNC.md); the
+unified household account model design in [docs/HOUSEHOLD.md](docs/HOUSEHOLD.md). Deployment (Neon + Cloudflare Workers via
 OpenNext) is wired — manual account steps are in [docs/DEPLOY.md](docs/DEPLOY.md);
 future-feature thinking lives in [docs/ROADMAP.md](docs/ROADMAP.md).
 

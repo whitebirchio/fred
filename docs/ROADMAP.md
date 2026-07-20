@@ -134,7 +134,9 @@ monthly-close prefill badge are live — see docs/SYNC.md. Verified end-to-end
 against the fixture provider; the Monarch adapter awaits a `MONARCH_TOKEN`
 for its first live run. Still open from this part: spending analytics pages,
 holdings-driven allocation (1.4), household toggle on dashboards, nightly
-cron.
+cron. The unified household-account model that consolidates all of this
+(accounts-vs-evidence, per-domain source-of-truth resolution, the /household
+experience) is designed in docs/HOUSEHOLD.md.
 
 ### What Monarch holds (its data model, independent of current API access)
 - **Accounts** with institution-synced live balances (incl. Kate's + joint)

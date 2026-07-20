@@ -204,6 +204,160 @@ export async function savePlanAssumptions(formData: FormData) {
   revalidatePath("/plan");
 }
 
+// ---------------------------------------------------------------------------
+// Household review queue (docs/HOUSEHOLD.md)
+// ---------------------------------------------------------------------------
+
+/** Attach a source record to an existing household account (the dedup path). */
+export async function linkSource(formData: FormData) {
+  const { externalAccounts } = await import("@/db/schema");
+  const externalId = Number(formData.get("externalAccountId"));
+  const accountId = Number(formData.get("accountId"));
+  if (!externalId || !accountId) throw new Error("Missing ids");
+  await db
+    .update(externalAccounts)
+    .set({ linkedAccountId: accountId, matchStatus: "confirmed", matchNote: null })
+    .where(eq(externalAccounts.id, externalId));
+  revalidatePath("/household");
+  revalidatePath("/", "layout");
+}
+
+/**
+ * Promote a source record into a new household account (the additive path).
+ * Creates the hub row, copies identity from the source as a starting point,
+ * and links the source to it — after this the account is indistinguishable in
+ * shape from a spreadsheet-born one, which is the point of the model.
+ */
+export async function promoteSource(formData: FormData) {
+  const { externalAccounts, accounts: accountsTable, persons: personsTable } =
+    await import("@/db/schema");
+  const { inferOwnerToken } = await import("@/lib/household");
+  const externalId = Number(formData.get("externalAccountId"));
+  if (!externalId) throw new Error("Missing external account id");
+
+  const [ext] = await db
+    .select()
+    .from(externalAccounts)
+    .where(eq(externalAccounts.id, externalId));
+  if (!ext) throw new Error("External account not found");
+
+  // Map the provider's account type onto Fred's categories.
+  const CATEGORY: Record<string, string> = {
+    checking: "cash",
+    savings: "cash",
+    brokerage: "brokerage",
+    retirement: "retirement",
+    crypto: "crypto",
+    credit: "credit",
+    mortgage: "loan",
+    loan: "loan",
+    real_estate: "property",
+  };
+  let category = CATEGORY[ext.accountType ?? ""] ?? "other";
+  // Provider types are coarse: Monarch files 401(k)s and IRAs as "brokerage"
+  // and HSAs as "checking". Names carry the real intent.
+  const n = ext.name.toLowerCase();
+  if (/401\(?k\)?|ira|pension|403b|457/.test(n)) category = "retirement";
+  else if (/hsa/.test(n)) category = "hsa";
+  else if (/529/.test(n)) category = "other";
+  if (!ext.isAsset && category !== "credit") category = "loan";
+
+  // Owner inferred from the provider's naming convention; unmatched people
+  // (e.g. children) are left unassigned for the user to set.
+  const people = await db.select().from(personsTable);
+  const token = inferOwnerToken(ext.name);
+  const matched =
+    token && token !== "joint"
+      ? people.find((p) => p.name.toLowerCase() === token)
+      : undefined;
+
+  const baseSlug = ext.name
+    .toLowerCase()
+    .replace(/\(\.\.\.[^)]*\)/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 48);
+  const existing = await db.select().from(accountsTable);
+  const taken = new Set(existing.map((a) => a.slug));
+  let slug = baseSlug || `account-${externalId}`;
+  let i = 2;
+  while (taken.has(slug)) slug = `${baseSlug}-${i++}`;
+
+  const [hub] = await db
+    .insert(accountsTable)
+    .values({
+      slug,
+      name: ext.name,
+      institution: ext.institution,
+      category: category as "cash",
+      ownerPersonId: matched?.id ?? null,
+      isJoint: token === "joint",
+      isActive: ext.isActive,
+      // Household-included by default ("everything in"); the individual
+      // net-worth lens stays opt-in so this can't disturb existing figures.
+      includeInHousehold: true,
+      includeInNetWorth: false,
+      sortOrder: 500,
+    })
+    .returning();
+
+  await db
+    .update(externalAccounts)
+    .set({ linkedAccountId: hub.id, matchStatus: "confirmed", matchNote: null })
+    .where(eq(externalAccounts.id, externalId));
+
+  revalidatePath("/household");
+  revalidatePath("/", "layout");
+}
+
+/** Exclude a source from the household with a recorded reason. */
+export async function ignoreSource(formData: FormData) {
+  const { externalAccounts } = await import("@/db/schema");
+  const externalId = Number(formData.get("externalAccountId"));
+  if (!externalId) throw new Error("Missing external account id");
+  await db
+    .update(externalAccounts)
+    .set({
+      matchStatus: "ignored",
+      linkedAccountId: null,
+      matchNote: String(formData.get("note") ?? "") || "Ignored by user",
+    })
+    .where(eq(externalAccounts.id, externalId));
+  revalidatePath("/household");
+  revalidatePath("/", "layout");
+}
+
+/** Send an ignored/linked source back to the review queue. */
+export async function unlinkSource(formData: FormData) {
+  const { externalAccounts } = await import("@/db/schema");
+  const externalId = Number(formData.get("externalAccountId"));
+  if (!externalId) throw new Error("Missing external account id");
+  await db
+    .update(externalAccounts)
+    .set({ linkedAccountId: null, matchStatus: "pending", matchNote: null })
+    .where(eq(externalAccounts.id, externalId));
+  revalidatePath("/household");
+  revalidatePath("/", "layout");
+}
+
+/** Household-level settings on a hub account. */
+export async function updateHouseholdAccount(formData: FormData) {
+  const { accounts: accountsTable } = await import("@/db/schema");
+  const id = Number(formData.get("accountId"));
+  if (!id) throw new Error("Missing account id");
+  const ownerRaw = String(formData.get("ownerPersonId") ?? "");
+  await db
+    .update(accountsTable)
+    .set({
+      includeInHousehold: formData.get("includeInHousehold") === "on",
+      ownerPersonId: ownerRaw && ownerRaw !== "joint" ? Number(ownerRaw) : null,
+      isJoint: ownerRaw === "joint",
+    })
+    .where(eq(accountsTable.id, id));
+  revalidatePath("/household");
+  revalidatePath("/", "layout");
+}
+
 export async function syncNow() {
   const { getProvider } = await import("@/lib/providers");
   const { runSync } = await import("@/lib/sync");

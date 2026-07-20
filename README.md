@@ -39,11 +39,12 @@ reloads all tables, so don't re-run it after entering new data in the app.
 | `/` | Net worth, allocation, per-account balances |
 | `/plan` | FI projection (live assumptions) + tax-aware bucket breakdown |
 | `/savings` | Savings vs growth, monthly savings, annual YTD overlays, savings rate |
-| `/accounts`, `/accounts/[slug]` | Account list, per-account history + statement entry |
+| `/household` | Unified roster across sources: resolved balances + provenance, review queue, slice-and-dice filters, liabilities |
+| `/accounts/[slug]` | Single-account detail: statement history + entry |
 | `/house` | Value/loan/equity, Scott–Kate split, payment ledger, valuation entry |
 | `/income` | Salary history, annual tax rates, automated 401(k) planner, paycheck entry |
 | `/monthly` | Monthly close checklist — enter statement balances, growth is derived |
-| `/sync` | External provider sync: linking, verification, household opt-ins |
+| `/sync` | Provider connection status, sync-now, run history |
 
 Metric definitions and the source-spreadsheet mapping live in
 [docs/ANALYSIS.md](docs/ANALYSIS.md); the external-sync architecture (provider

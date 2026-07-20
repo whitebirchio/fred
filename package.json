@@ -17,7 +17,8 @@
     "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts",
     "monarch:probe": "node --env-file=.env node_modules/.bin/tsx scripts/monarch_probe.ts",
     "sync:state": "node --env-file=.env node_modules/.bin/tsx scripts/db_state.ts",
-    "sync:now": "node --env-file=.env node_modules/.bin/tsx scripts/sync_now.ts"
+    "sync:now": "node --env-file=.env node_modules/.bin/tsx scripts/sync_now.ts",
+    "household:backfill": "node --env-file=.env node_modules/.bin/tsx scripts/backfill_household.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.4",

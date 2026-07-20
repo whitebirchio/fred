@@ -28,6 +28,9 @@ export const persons = pgTable("persons", {
 // Accounts + monthly statement entries
 // ---------------------------------------------------------------------------
 
+// Asset categories, then liability categories. Liability balances are stored
+// as positive magnitudes; the sign is applied at rollup (see isLiability in
+// src/lib/household.ts) so a card balance can never be mistaken for an asset.
 export const accountCategory = pgEnum("account_category", [
   "cash",
   "retirement",
@@ -36,6 +39,9 @@ export const accountCategory = pgEnum("account_category", [
   "crypto",
   "property",
   "other",
+  // liabilities
+  "credit",
+  "loan",
 ]);
 
 export const taxTreatment = pgEnum("tax_treatment", [
@@ -76,6 +82,16 @@ export const accounts = pgTable("accounts", {
   // account as mixed-bucket (tax character varies per contribution rather
   // than per account).
   taxLotGroup: text("tax_lot_group"),
+  // Household lens: whether this account counts toward household rollups.
+  // Distinct from include_in_net_worth, which is the individual (Scott) lens
+  // inherited from the workbook. Default true — "everything in" — because
+  // exclusion is a deliberate act; unreviewed *sources* are held out
+  // separately via external_accounts.match_status, not via this flag.
+  includeInHousehold: boolean("include_in_household").notNull().default(true),
+  // Optional per-domain source priority override, e.g.
+  //   { "live_balance": ["statements", "monarch"] }
+  // Absent (the norm) = household default order; see src/lib/household.ts.
+  resolution: jsonb("resolution"),
   sortOrder: integer("sort_order").notNull().default(0),
   notes: text("notes"),
 });
@@ -293,12 +309,26 @@ export const externalAccounts = pgTable(
     currentBalance: money("current_balance").notNull().default(0),
     balanceAsOf: date("balance_as_of"),
     isActive: boolean("is_active").notNull().default(true),
-    // Link to a Fred statement-tracked account: linked = duplicative coverage
-    // (used for verification/prefill, excluded from household additions).
+    // The spoke→hub pointer: which household account this row is evidence
+    // about. Every source record resolves through its hub; it is never itself
+    // an account.
     linkedAccountId: integer("linked_account_id").references(() => accounts.id),
+    // The state machine that makes dedup safe (docs/HOUSEHOLD.md):
+    //   pending   — discovered, awaiting review; NEVER counted
+    //   auto      — machine-matched to a hub account, unconfirmed; counted
+    //   confirmed — user-confirmed link; counted
+    //   ignored   — deliberately excluded (e.g. Zestimate/mortgage, already
+    //               represented by the property ledger); NEVER counted
+    // Only rows with a linkedAccountId AND status auto|confirmed contribute
+    // to any number, which is what keeps a duplicate from inflating totals
+    // while the review queue is being worked.
+    matchStatus: text("match_status").notNull().default("pending"),
+    // Why an account was ignored — kept so "ignored" never reads as
+    // "uninteresting" when the real reason is "counted elsewhere".
+    matchNote: text("match_note"),
     ownerPersonId: integer("owner_person_id").references(() => persons.id),
-    // Unlinked accounts are additive but excluded from household totals until
-    // explicitly opted in (prevents double counting by default).
+    // DEPRECATED (hub-owned now): household inclusion and ownership live on
+    // `accounts`. Retained so the migration is non-destructive; no longer read.
     includeInHousehold: boolean("include_in_household").notNull().default(false),
     ownershipShare: numeric("ownership_share", {
       precision: 5,

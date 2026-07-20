@@ -1,8 +1,22 @@
 # The Household: unified account model & resolution design
 
 Design for making account management coherent as sources multiply. Status:
-**design approved-pending-review; not yet implemented.** Companion to
+**Phases 0–2 shipped (2026-07-20); Phase 3 pending.** Companion to
 docs/SYNC.md (which covers the provider plumbing this builds on).
+
+**What's live:** the hub/spoke schema, the resolution engine with provenance
+(`src/lib/household.ts`), and the `/household` page — roster grouped by owner
+with provenance badges, a review queue with ranked match suggestions,
+slice-and-dice filters that recompute every total, liabilities in net worth,
+and the excluded-sources list. `/accounts` (the list) now redirects here;
+`/accounts/[slug]` remains the single-account detail view. Verified against
+real data: linking a Monarch source to its Fred account correctly switched
+its live balance to Monarch's fresher value (with a Δ chip explaining the
+$13k month-end-vs-today gap), promoting "Kate 401(k)" created a new
+retirement account owned by Kate, and filtering to Kate recomputed net worth
+to her accounts alone. **Not yet built (Phase 3):** household net-worth
+*series* over time, the property-as-account treatment on `/house`, and
+retiring the deprecated ownership columns on `external_accounts`.
 
 ## The problem
 
@@ -126,13 +140,13 @@ account in the household — Scott's, Kate's, joint, liabilities — is one
 Fred already nets the mortgage inside the even-split equity convention
 (equity = market value − loan, ÷2). So Monarch's mortgage account and
 Zestimate must **not** enter the roster as independent accounts — that would
-double count. Instead the property becomes a household account whose
-evidence includes: the Fred property ledger (payments/valuations —
-authoritative), Monarch's Zestimate (a valuation source to compare against
-manual estimates), and Monarch's mortgage account (a loan-balance source to
-verify the ledger's running balance). Same hub-and-spoke shape, just with
-property-flavored domains (`market_value`, `loan_balance`). Phase 3+; until
-then those two Monarch rows stay `ignored` with a note.
+double count. Per decision 2 the primary residence stays a permanently
+special category with its own `/house` page, reported as a distinct line
+rather than blended into the account roster. Those two Monarch rows are
+therefore `ignored`, with a note recording *why* (not "uninteresting" —
+"already represented by the property ledger"). The Zestimate may later feed
+the property ledger as a valuation source; that is a `/house` feature, not a
+roster one.
 
 ## The end-to-end experience
 
@@ -198,15 +212,45 @@ this property, it's the wrong feature shape.
 - **Phase 3 — household analytics**: resolved household net-worth series,
   liabilities in totals, lens toggle on Overview, property-as-account.
 
+## Decisions (2026-07-20)
+
+1. **Liabilities are in.** Credit cards, auto loans and similar count toward
+   household net worth (assets − liabilities). Categories `credit` and `loan`
+   added; liabilities are stored as positive magnitudes with the sign applied
+   at rollup, so a card balance never accidentally reads as an asset.
+
+2. **The house stays special — permanently, not just until Phase 3.** The
+   rationale is structural, not stylistic: *you always need somewhere to
+   live*, so primary-residence equity is not fungible with investable assets
+   and shouldn't sit beside them in a roster or blend into a single net-worth
+   number. It stays its own category with its own page, reported as a
+   distinct line (this is already why `/plan` excludes it from FI assets —
+   you cannot spend your house). Monarch's Zestimate and mortgage rows are
+   therefore `ignored` in the roster: the property ledger already nets the
+   loan inside even-split equity, so admitting them would double count.
+   *Future investment properties are a different case* — those are genuine
+   portfolio assets and would join the roster as normal accounts; the
+   distinction to encode is primary-residence vs. investment property, not
+   house vs. not-house.
+
+3. **`/household` replaces `/accounts` outright.** `/accounts/[slug]`
+   survives as the detail view for a single account.
+
+4. **Default lens: everything, then slice.** Rather than a binary
+   My-view/Household toggle, the default is the full household and the user
+   narrows it — by owner, category, or individual account — with every
+   number recomputing against the current selection. "My view" becomes just
+   a saved filter (owner = Scott), not a separate mode.
+
+   **Safety exception:** *unreviewed* sources are never included, regardless
+   of the everything-by-default rule. This is what prevents double counting
+   while the review queue is worked — several Monarch accounts clearly
+   duplicate existing Fred accounts without auto-matching (e.g. Monarch
+   "Scott 401(k) (…7830)" ≈ Fred "LM 401(k)"), so silently counting all 32
+   unlinked rows would inflate net worth by roughly a million dollars.
+   Reviewed → included by default; pending → excluded and visibly flagged.
+
 ## Open questions
 
-1. **Liabilities**: include credit cards / auto loan in household net worth
-   (assets − liabilities)? Presumably yes — and their transactions already
-   sync, feeding future spending analytics.
-2. **The house**: adopt property-as-household-account (Phase 3) or keep the
-   current special-case indefinitely?
-3. **Naming/navigation**: does `/household` replace `/accounts` outright
-   (recommended), with `/accounts/[slug]` remaining as the statements-source
-   detail view it already is?
-4. **Default lens**: should Overview eventually default to Household with
-   My-view as the filter, or stay individual-first? (No change until asked.)
+- Does the primary-residence-vs-investment-property distinction want an
+  explicit flag now, or wait until an investment property actually exists?

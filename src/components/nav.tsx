@@ -8,7 +8,7 @@ const LINKS = [
   { href: "/", label: "Overview" },
   { href: "/plan", label: "Plan" },
   { href: "/savings", label: "Savings" },
-  { href: "/accounts", label: "Accounts" },
+  { href: "/household", label: "Household" },
   { href: "/house", label: "House" },
   { href: "/income", label: "Income" },
   { href: "/monthly", label: "Monthly close" },

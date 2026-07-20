@@ -34,8 +34,12 @@ Banked 2026-07-19 so they don't get lost. Revisit as needed.
 8. **Roadmap review** — `docs/ROADMAP.md` holds the advisor-lens feature
    thinking and the Monarch integration design; pick the first slice.
 
-9. **Household account model** — design in `docs/HOUSEHOLD.md` (hub/spoke
-   accounts-vs-evidence, per-domain resolution with provenance, /household
-   page + review queue, 4 phases). Its own open questions: liabilities in
-   household net worth, property-as-account, /household replacing /accounts,
-   default lens.
+9. **Household account model** — ✅ Phases 0–2 shipped (2026-07-20). Hub/spoke
+   accounts-vs-evidence, resolution engine with provenance, `/household` page
+   (roster + review queue + slice-and-dice), liabilities in net worth. All
+   four sub-decisions resolved (see `docs/HOUSEHOLD.md` § Decisions).
+   Remaining: Phase 3 (household net-worth series, property-as-account on
+   /house, drop deprecated external_accounts ownership columns), and the
+   one open question of whether primary-residence-vs-investment-property
+   needs an explicit flag before an investment property exists. **31 Monarch
+   accounts await triage in the /household review queue** — a one-time pass.

@@ -43,9 +43,11 @@ reloads all tables, so don't re-run it after entering new data in the app.
 | `/house` | Value/loan/equity, Scott–Kate split, payment ledger, valuation entry |
 | `/income` | Salary history, annual tax rates, automated 401(k) planner, paycheck entry |
 | `/monthly` | Monthly close checklist — enter statement balances, growth is derived |
+| `/sync` | External provider sync: linking, verification, household opt-ins |
 
 Metric definitions and the source-spreadsheet mapping live in
-[docs/ANALYSIS.md](docs/ANALYSIS.md). Deployment (Neon + Cloudflare Workers via
+[docs/ANALYSIS.md](docs/ANALYSIS.md); the external-sync architecture (provider
+abstraction, dedup rules, idempotency) in [docs/SYNC.md](docs/SYNC.md). Deployment (Neon + Cloudflare Workers via
 OpenNext) is wired — manual account steps are in [docs/DEPLOY.md](docs/DEPLOY.md);
 future-feature thinking lives in [docs/ROADMAP.md](docs/ROADMAP.md).
 

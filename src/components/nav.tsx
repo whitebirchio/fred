@@ -12,6 +12,7 @@ const LINKS = [
   { href: "/house", label: "House" },
   { href: "/income", label: "Income" },
   { href: "/monthly", label: "Monthly close" },
+  { href: "/sync", label: "Sync" },
 ];
 
 export function Nav() {

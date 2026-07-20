@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { loadAccounts, loadHouse, houseMonthly } from "@/lib/metrics";
 import { contributionFieldFor } from "@/lib/taxlots";
+import { snapshotNear } from "@/lib/sync";
 import { CATEGORY_META } from "@/lib/categories";
 import { money, monthEnd, monthLabel } from "@/lib/format";
 import { Card, PageHeader } from "@/components/ui";
@@ -33,11 +34,15 @@ export default async function MonthlyPage({
   const [accts, house] = await Promise.all([loadAccounts(), loadHouse()]);
   const active = accts.filter((a) => a.isActive);
 
-  const rows = active.map((a) => {
-    const entry = a.entries.find((e) => e.statementDate === target) ?? null;
-    const prev = [...a.entries].filter((e) => e.statementDate < target).at(-1);
-    return { account: a, entry, prevBalance: prev?.balance ?? 0 };
-  });
+  const rows = await Promise.all(
+    active.map(async (a) => {
+      const entry = a.entries.find((e) => e.statementDate === target) ?? null;
+      const prev = [...a.entries].filter((e) => e.statementDate < target).at(-1);
+      // Synced-provider balance near the target month-end, for prefill/verify
+      const providerSnap = entry ? null : await snapshotNear(a.id, target);
+      return { account: a, entry, prevBalance: prev?.balance ?? 0, providerSnap };
+    }),
+  );
   const done = rows.filter((r) => r.entry).length;
 
   const houseMonths = house ? houseMonthly(house) : [];
@@ -90,7 +95,7 @@ export default async function MonthlyPage({
         </div>
       </Card>
 
-      {rows.map(({ account, entry, prevBalance }) => (
+      {rows.map(({ account, entry, prevBalance, providerSnap }) => (
         <Card key={account.id}>
           <details open={!entry}>
             <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
@@ -116,6 +121,11 @@ export default async function MonthlyPage({
                 </span>
               ) : (
                 <span className="text-xs text-ink-3">
+                  {providerSnap && (
+                    <span className="mr-2 rounded bg-surface-2 px-1.5 py-0.5 text-accent">
+                      synced: {money(providerSnap.balance)} on {providerSnap.date}
+                    </span>
+                  )}
                   awaiting statement · prior {money(prevBalance)}
                 </span>
               )}

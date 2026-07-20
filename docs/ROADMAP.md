@@ -127,6 +127,15 @@ Mostly manual attestations with annual reminders — low tech, high value.
 
 ## Part 2 — Monarch integration
 
+**Status: foundation shipped (2026-07-19).** The provider abstraction
+(`src/lib/providers/`), idempotent sync engine (`src/lib/sync.ts`), storage
+tables, `/sync` page (linking, verification, household opt-ins) and the
+monthly-close prefill badge are live — see docs/SYNC.md. Verified end-to-end
+against the fixture provider; the Monarch adapter awaits a `MONARCH_TOKEN`
+for its first live run. Still open from this part: spending analytics pages,
+holdings-driven allocation (1.4), household toggle on dashboards, nightly
+cron.
+
 ### What Monarch holds (its data model, independent of current API access)
 - **Accounts** with institution-synced live balances (incl. Kate's + joint)
 - **Balance snapshots** / net-worth history per account

@@ -204,6 +204,34 @@ export async function savePlanAssumptions(formData: FormData) {
   revalidatePath("/plan");
 }
 
+export async function syncNow() {
+  const { getProvider } = await import("@/lib/providers");
+  const { runSync } = await import("@/lib/sync");
+  await runSync(getProvider());
+  revalidatePath("/sync");
+  revalidatePath("/monthly");
+}
+
+export async function updateExternalAccount(formData: FormData) {
+  const { externalAccounts } = await import("@/db/schema");
+  const id = Number(formData.get("externalAccountId"));
+  if (!id) throw new Error("Missing external account id");
+  const linkedRaw = String(formData.get("linkedAccountId") ?? "");
+  const ownerRaw = String(formData.get("ownerPersonId") ?? "");
+  const share = num(formData.get("ownershipShare"));
+  await db
+    .update(externalAccounts)
+    .set({
+      linkedAccountId: linkedRaw ? Number(linkedRaw) : null,
+      ownerPersonId: ownerRaw ? Number(ownerRaw) : null,
+      includeInHousehold: formData.get("includeInHousehold") === "on",
+      ownershipShare: share > 0 && share <= 1 ? share : 1,
+    })
+    .where(eq(externalAccounts.id, id));
+  revalidatePath("/sync");
+  revalidatePath("/monthly");
+}
+
 export async function toggleAccountActive(formData: FormData) {
   const id = Number(formData.get("accountId"));
   const isActive = String(formData.get("isActive")) === "true";

@@ -1,0 +1,110 @@
+{
+  "comment": "Synthetic provider payload used by the fixture SyncProvider for tokenless development and pipeline testing. Shapes mirror src/lib/providers/types.ts. Balances for linked accounts intentionally include one exact match (Ally Savings @ 2026-05-31) and one small mismatch (Vanguard Brokerage) to exercise verification.",
+  "accounts": [
+    {
+      "externalId": "fx-ally-savings",
+      "name": "Ally Savings",
+      "institution": "Ally Bank",
+      "accountType": "savings",
+      "isAsset": true,
+      "balance": 22391.44,
+      "isActive": true,
+      "dailyBalances": [
+        { "date": "2026-05-31", "balance": 22273.07 },
+        { "date": "2026-06-30", "balance": 22350.61 },
+        { "date": "2026-07-18", "balance": 22391.44 }
+      ]
+    },
+    {
+      "externalId": "fx-vanguard-brokerage",
+      "name": "Vanguard Brokerage Account",
+      "institution": "Vanguard",
+      "accountType": "brokerage",
+      "isAsset": true,
+      "balance": 1041220.18,
+      "isActive": true,
+      "dailyBalances": [
+        { "date": "2026-05-31", "balance": 1022890.55 },
+        { "date": "2026-06-30", "balance": 1035512.4 },
+        { "date": "2026-07-18", "balance": 1041220.18 }
+      ]
+    },
+    {
+      "externalId": "fx-joint-checking",
+      "name": "Joint Checking",
+      "institution": "Ally Bank",
+      "accountType": "checking",
+      "isAsset": true,
+      "balance": 6412.9,
+      "isActive": true,
+      "dailyBalances": [
+        { "date": "2026-06-30", "balance": 5980.22 },
+        { "date": "2026-07-18", "balance": 6412.9 }
+      ]
+    },
+    {
+      "externalId": "fx-kate-401k",
+      "name": "Kate 401(k)",
+      "institution": "Fidelity NetBenefits",
+      "accountType": "retirement",
+      "isAsset": true,
+      "balance": 287345.12,
+      "isActive": true,
+      "dailyBalances": [
+        { "date": "2026-05-31", "balance": 281100.4 },
+        { "date": "2026-06-30", "balance": 285720.75 },
+        { "date": "2026-07-18", "balance": 287345.12 }
+      ]
+    },
+    {
+      "externalId": "fx-kate-roth",
+      "name": "Kate Roth IRA",
+      "institution": "Fidelity",
+      "accountType": "retirement",
+      "isAsset": true,
+      "balance": 48210.33,
+      "isActive": true,
+      "dailyBalances": [
+        { "date": "2026-06-30", "balance": 47890.1 },
+        { "date": "2026-07-18", "balance": 48210.33 }
+      ]
+    },
+    {
+      "externalId": "fx-house",
+      "name": "13 Charron Cir (Zestimate)",
+      "institution": "Zillow",
+      "accountType": "real_estate",
+      "isAsset": true,
+      "balance": 631400,
+      "isActive": true,
+      "dailyBalances": [{ "date": "2026-07-01", "balance": 631400 }]
+    },
+    {
+      "externalId": "fx-mortgage",
+      "name": "Chase Mortgage",
+      "institution": "Chase",
+      "accountType": "mortgage",
+      "isAsset": false,
+      "balance": -254747.19,
+      "isActive": true,
+      "dailyBalances": [{ "date": "2026-07-01", "balance": -254747.19 }]
+    }
+  ],
+  "transactions": [
+    { "externalId": "fx-t1", "accountExternalId": "fx-joint-checking", "date": "2026-07-15", "amount": -628.88, "pending": false, "merchant": "Chase Mortgage", "category": "Mortgage", "categoryGroup": "Housing", "notes": null, "tags": [] },
+    { "externalId": "fx-t2", "accountExternalId": "fx-joint-checking", "date": "2026-07-12", "amount": -214.67, "pending": false, "merchant": "Market Basket", "category": "Groceries", "categoryGroup": "Food & Dining", "notes": null, "tags": [] },
+    { "externalId": "fx-t3", "accountExternalId": "fx-joint-checking", "date": "2026-07-10", "amount": -86.4, "pending": false, "merchant": "Eversource", "category": "Electric", "categoryGroup": "Utilities", "notes": null, "tags": [] },
+    { "externalId": "fx-t4", "accountExternalId": "fx-ally-savings", "date": "2026-07-01", "amount": 82.15, "pending": false, "merchant": "Ally Interest", "category": "Interest", "categoryGroup": "Income", "notes": null, "tags": [] },
+    { "externalId": "fx-t5", "accountExternalId": "fx-joint-checking", "date": "2026-07-03", "amount": -142.5, "pending": false, "merchant": "Costco", "category": "Groceries", "categoryGroup": "Food & Dining", "notes": null, "tags": [] },
+    { "externalId": "fx-t6", "accountExternalId": "fx-joint-checking", "date": "2026-06-28", "amount": -165, "pending": false, "merchant": "HOA", "category": "HOA Dues", "categoryGroup": "Housing", "notes": null, "tags": [] },
+    { "externalId": "fx-t7", "accountExternalId": "fx-joint-checking", "date": "2026-06-25", "amount": -74.32, "pending": false, "merchant": "Shell", "category": "Gas", "categoryGroup": "Auto & Transport", "notes": null, "tags": [] },
+    { "externalId": "fx-t8", "accountExternalId": "fx-joint-checking", "date": "2026-06-20", "amount": 3120.11, "pending": false, "merchant": "Kate Employer Payroll", "category": "Paychecks", "categoryGroup": "Income", "notes": null, "tags": [] },
+    { "externalId": "fx-t9", "accountExternalId": "fx-joint-checking", "date": "2026-06-18", "amount": -92.8, "pending": false, "merchant": "Olive Garden", "category": "Restaurants", "categoryGroup": "Food & Dining", "notes": null, "tags": [] },
+    { "externalId": "fx-t10", "accountExternalId": "fx-vanguard-brokerage", "date": "2026-06-15", "amount": -3000, "pending": false, "merchant": "Vanguard Buy VTSAX", "category": "Transfer", "categoryGroup": "Transfers", "notes": null, "tags": [] }
+  ],
+  "holdings": [
+    { "accountExternalId": "fx-vanguard-brokerage", "ticker": "VTSAX", "name": "Vanguard Total Stock Market Index Admiral", "quantity": 6402.31, "price": 148.82, "value": 952791.78 },
+    { "accountExternalId": "fx-vanguard-brokerage", "ticker": "VTIAX", "name": "Vanguard Total International Stock Index Admiral", "quantity": 1890.44, "price": 38.11, "value": 72044.67 },
+    { "accountExternalId": "fx-vanguard-brokerage", "ticker": "VMFXX", "name": "Vanguard Federal Money Market", "quantity": 16383.73, "price": 1, "value": 16383.73 }
+  ]
+}

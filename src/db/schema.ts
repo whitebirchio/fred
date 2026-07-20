@@ -9,6 +9,7 @@ import {
   pgTable,
   serial,
   text,
+  timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 
@@ -266,4 +267,126 @@ export const contributionLimits = pgTable(
 export const appConfig = pgTable("app_config", {
   key: text("key").primaryKey(),
   value: jsonb("value").notNull(),
+});
+
+// ---------------------------------------------------------------------------
+// External sync (Monarch today, anything tomorrow)
+//
+// Everything below is provider-agnostic: rows are keyed by (provider,
+// external id) so syncs are idempotent, and all fields are Fred's own shape —
+// the provider's original payload survives only in `raw` as an escape hatch
+// that application logic must never read. Statement-based `account_entries`
+// remain the system of record for the monthly close; synced data verifies,
+// prefills, and extends (household, spending, holdings) but never overwrites.
+// ---------------------------------------------------------------------------
+
+export const externalAccounts = pgTable(
+  "external_accounts",
+  {
+    id: serial("id").primaryKey(),
+    provider: text("provider").notNull(),
+    externalId: text("external_id").notNull(),
+    name: text("name").notNull(),
+    institution: text("institution"),
+    accountType: text("account_type"), // provider-normalized: checking, brokerage, mortgage…
+    isAsset: boolean("is_asset").notNull().default(true),
+    currentBalance: money("current_balance").notNull().default(0),
+    balanceAsOf: date("balance_as_of"),
+    isActive: boolean("is_active").notNull().default(true),
+    // Link to a Fred statement-tracked account: linked = duplicative coverage
+    // (used for verification/prefill, excluded from household additions).
+    linkedAccountId: integer("linked_account_id").references(() => accounts.id),
+    ownerPersonId: integer("owner_person_id").references(() => persons.id),
+    // Unlinked accounts are additive but excluded from household totals until
+    // explicitly opted in (prevents double counting by default).
+    includeInHousehold: boolean("include_in_household").notNull().default(false),
+    ownershipShare: numeric("ownership_share", {
+      precision: 5,
+      scale: 4,
+      mode: "number",
+    })
+      .notNull()
+      .default(1),
+    raw: jsonb("raw"),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [uniqueIndex("external_accounts_provider_idx").on(t.provider, t.externalId)],
+);
+
+export const balanceSnapshots = pgTable(
+  "balance_snapshots",
+  {
+    id: serial("id").primaryKey(),
+    externalAccountId: integer("external_account_id")
+      .notNull()
+      .references(() => externalAccounts.id, { onDelete: "cascade" }),
+    date: date("date").notNull(),
+    balance: money("balance").notNull(),
+  },
+  (t) => [
+    uniqueIndex("balance_snapshots_idx").on(t.externalAccountId, t.date),
+  ],
+);
+
+export const externalTransactions = pgTable(
+  "external_transactions",
+  {
+    id: serial("id").primaryKey(),
+    provider: text("provider").notNull(),
+    externalId: text("external_id").notNull(),
+    externalAccountId: integer("external_account_id")
+      .notNull()
+      .references(() => externalAccounts.id, { onDelete: "cascade" }),
+    date: date("date").notNull(),
+    // Provider convention preserved after normalization: negative = outflow.
+    amount: money("amount").notNull(),
+    pending: boolean("pending").notNull().default(false),
+    merchant: text("merchant"),
+    category: text("category"),
+    categoryGroup: text("category_group"),
+    notes: text("notes"),
+    tags: jsonb("tags"),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("external_transactions_provider_idx").on(t.provider, t.externalId),
+    index("external_transactions_date_idx").on(t.date),
+    index("external_transactions_account_idx").on(t.externalAccountId, t.date),
+  ],
+);
+
+export const holdings = pgTable(
+  "holdings",
+  {
+    id: serial("id").primaryKey(),
+    externalAccountId: integer("external_account_id")
+      .notNull()
+      .references(() => externalAccounts.id, { onDelete: "cascade" }),
+    asOf: date("as_of").notNull(),
+    ticker: text("ticker"),
+    name: text("name").notNull(),
+    quantity: numeric("quantity", { precision: 18, scale: 6, mode: "number" }),
+    price: money("price"),
+    value: money("value").notNull(),
+  },
+  (t) => [uniqueIndex("holdings_idx").on(t.externalAccountId, t.asOf, t.name)],
+);
+
+export const syncRuns = pgTable("sync_runs", {
+  id: serial("id").primaryKey(),
+  provider: text("provider").notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true, mode: "string" }),
+  status: text("status").notNull().default("running"), // running | success | error
+  stats: jsonb("stats"),
+  error: text("error"),
 });

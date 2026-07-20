@@ -62,8 +62,8 @@ Open the workers.dev URL on your phone → Share → **Add to Home Screen**
 
 ### Later (when ready)
 
-- `npx wrangler secret put MONARCH_TOKEN` — for the Monarch sync
-  (see [ROADMAP.md](ROADMAP.md)).
+- `npx wrangler secret put MONARCH_TOKEN` — enables the Monarch sync on
+  `/sync` (see [SYNC.md](SYNC.md) for how to obtain the token).
 - Custom domain: Worker → Settings → Domains & Routes → Add custom domain
   (requires the domain's DNS on Cloudflare).
 

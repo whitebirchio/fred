@@ -1,4 +1,4 @@
-import { desc } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import {
   accountEntries,
@@ -170,11 +170,19 @@ export type SourceChip = {
   externalName?: string;
 };
 
+/** How an account is known across sources — the at-a-glance answer to "what
+ *  exists and how does it relate", rendered as a badge:
+ *   both       — tracked in the spreadsheet AND synced from a provider
+ *   provider   — synced only (Kate's, the kids', joint, liabilities)
+ *   statements — spreadsheet only, no live feed (older/closed accounts) */
+export type Connectivity = "both" | "provider" | "statements" | "none";
+
 export type HouseholdAccount = {
   id: number;
   slug: string;
   name: string;
   institution: string | null;
+  institutionLabel: string;
   category: string;
   isLiability: boolean;
   ownerPersonId: number | null;
@@ -183,6 +191,7 @@ export type HouseholdAccount = {
   includeInHousehold: boolean;
   isActive: boolean;
   hasStatements: boolean;
+  connectivity: Connectivity;
   balance: Resolved;
   /** Balance signed for rollups (liabilities negative). */
   signedBalance: number;
@@ -209,6 +218,32 @@ export type HouseholdView = {
 };
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+/** Canonical institution label for grouping — collapses "Ally Bank"/"Ally",
+ *  "Fidelity"/"Fidelity NetBenefits", "Optum Bank - Health Savings Account"
+ *  etc. onto one heading so an account and its synced twin land together. */
+const INSTITUTION_ALIASES: [RegExp, string][] = [
+  [/vanguard/i, "Vanguard"],
+  [/ally/i, "Ally"],
+  [/fidelity/i, "Fidelity"],
+  [/coinbase/i, "Coinbase"],
+  [/optum/i, "Optum"],
+  [/chase/i, "Chase"],
+  [/treasury/i, "TreasuryDirect"],
+  [/robinhood/i, "Robinhood"],
+  [/alpaca/i, "Alpaca"],
+  [/td\s*ameritrade/i, "TD Ameritrade"],
+  [/becu/i, "BECU"],
+  [/lighthouse/i, "Lighthouse CU"],
+  [/usaa/i, "USAA"],
+  [/toyota/i, "Toyota Financial"],
+];
+export function canonicalizeInstitution(raw: string | null): string {
+  if (!raw) return "Other";
+  for (const [re, label] of INSTITUTION_ALIASES) if (re.test(raw)) return label;
+  // Employer-plan codes (LM = Lockheed, HS = a prior employer) stay as-is.
+  return raw.trim();
+}
 
 /** Person tokens appearing in account names. Monarch prefixes names with the
  *  owner ("Kate 401(k)", "Scott + Kate Savings"), which is the single most
@@ -320,6 +355,92 @@ export function suggestMatches(
   return out.sort((a, b) => b.score - a.score).slice(0, 3);
 }
 
+// ---------------------------------------------------------------------------
+// Auto-match
+// ---------------------------------------------------------------------------
+
+/** A source only auto-merges when its single best match is this confident.
+ *  At this level a match requires same institution + a shared distinctive
+ *  token + balance within 2% (30+25+45), which in practice is only ever the
+ *  right account. Anything below stays in the guided review. */
+export const AUTO_MATCH_THRESHOLD = 90;
+
+/**
+ * Link every pending source whose top match clears the confidence bar and is
+ * unambiguous (no runner-up also above the bar). Fully reversible — it sets
+ * matchStatus 'auto', which the roster flags with an undo. Idempotent; safe
+ * to run after every sync and on the existing backlog.
+ */
+export async function autoMatchConfident(): Promise<
+  { externalId: number; externalName: string; accountId: number; accountName: string; score: number }[]
+> {
+  const [hubs, externals, entries] = await Promise.all([
+    db.select().from(accounts),
+    db.select().from(externalAccounts),
+    db
+      .select({
+        accountId: accountEntries.accountId,
+        statementDate: accountEntries.statementDate,
+        balance: accountEntries.balance,
+      })
+      .from(accountEntries)
+      .orderBy(desc(accountEntries.statementDate)),
+  ]);
+
+  const latest = new Map<number, number>();
+  for (const e of entries) if (!latest.has(e.accountId)) latest.set(e.accountId, e.balance);
+  const hubSummaries = hubs.map((h) => ({
+    id: h.id,
+    name: h.name,
+    institution: h.institution,
+    latestBalance: latest.get(h.id) ?? null,
+  }));
+
+  const taken = new Set(
+    externals
+      .filter((e) => e.linkedAccountId && (e.matchStatus === "auto" || e.matchStatus === "confirmed"))
+      .map((e) => e.linkedAccountId!),
+  );
+
+  // Highest-confidence first, so if two sources want the same hub the better
+  // one claims it and the other falls through to review.
+  const pending = externals
+    .filter((e) => e.matchStatus === "pending")
+    .map((e) => ({ e, sugg: suggestMatches(e, hubSummaries, taken) }))
+    .filter((x) => x.sugg[0])
+    .sort((a, b) => b.sugg[0].score - a.sugg[0].score);
+
+  const merged: Awaited<ReturnType<typeof autoMatchConfident>> = [];
+  for (const { e } of pending) {
+    const sugg = suggestMatches(e, hubSummaries, taken); // fresh vs current taken
+    const top = sugg[0];
+    if (!top || top.score < AUTO_MATCH_THRESHOLD) continue;
+    if (sugg[1] && sugg[1].score >= AUTO_MATCH_THRESHOLD) continue; // ambiguous
+    await db
+      .update(externalAccounts)
+      .set({ linkedAccountId: top.accountId, matchStatus: "auto", matchNote: null })
+      .where(eq(externalAccounts.id, e.id));
+    taken.add(top.accountId);
+    merged.push({
+      externalId: e.id,
+      externalName: e.name,
+      accountId: top.accountId,
+      accountName: top.name,
+      score: top.score,
+    });
+  }
+  return merged;
+}
+
+/** Count of sources still needing a human decision (drives the review band). */
+export async function pendingCount(): Promise<number> {
+  const rows = await db
+    .select({ id: externalAccounts.id })
+    .from(externalAccounts)
+    .where(and(eq(externalAccounts.matchStatus, "pending")));
+  return rows.length;
+}
+
 /** Build the whole household view in one pass. */
 export async function loadHousehold(asOf?: string): Promise<HouseholdView> {
   const today = asOf ?? new Date().toISOString().slice(0, 10);
@@ -408,11 +529,22 @@ export async function loadHousehold(asOf?: string): Promise<HouseholdView> {
     const override = (h.resolution as Record<string, SourceId[]> | null)?.live_balance;
     const balance = resolve(obs, override ?? DEFAULT_PRIORITY.live_balance, today);
 
+    const hasProvider = chips.some((c) => c.source !== "statements");
+    const connectivity: Connectivity =
+      stmt && hasProvider
+        ? "both"
+        : hasProvider
+          ? "provider"
+          : stmt
+            ? "statements"
+            : "none";
+
     return {
       id: h.id,
       slug: h.slug,
       name: h.name,
       institution: h.institution,
+      institutionLabel: canonicalizeInstitution(h.institution),
       category: h.category,
       isLiability: isLiability(h.category),
       ownerPersonId: h.ownerPersonId,
@@ -423,6 +555,7 @@ export async function loadHousehold(asOf?: string): Promise<HouseholdView> {
       includeInHousehold: h.includeInHousehold,
       isActive: h.isActive,
       hasStatements: Boolean(stmt),
+      connectivity,
       balance,
       signedBalance: signedValue(h.category, balance.value ?? 0),
       sources: chips,

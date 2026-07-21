@@ -361,9 +361,24 @@ export async function updateHouseholdAccount(formData: FormData) {
 export async function syncNow() {
   const { getProvider } = await import("@/lib/providers");
   const { runSync } = await import("@/lib/sync");
+  const { autoMatchConfident } = await import("@/lib/household");
   await runSync(getProvider());
+  // Keep the review queue small: confident duplicates match themselves, so a
+  // fresh sync never dumps a wall of obvious pairs on the user.
+  await autoMatchConfident();
   revalidatePath("/sync");
   revalidatePath("/monthly");
+  revalidatePath("/household");
+  revalidatePath("/", "layout");
+}
+
+/** Run auto-match on demand (the /household "Auto-match confident" affordance
+ *  and the one-time pass over an existing backlog). */
+export async function autoMatchNow() {
+  const { autoMatchConfident } = await import("@/lib/household");
+  await autoMatchConfident();
+  revalidatePath("/household");
+  revalidatePath("/", "layout");
 }
 
 export async function updateExternalAccount(formData: FormData) {

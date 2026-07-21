@@ -5,18 +5,57 @@ Design for making account management coherent as sources multiply. Status:
 docs/SYNC.md (which covers the provider plumbing this builds on).
 
 **What's live:** the hub/spoke schema, the resolution engine with provenance
-(`src/lib/household.ts`), and the `/household` page — roster grouped by owner
-with provenance badges, a review queue with ranked match suggestions,
-slice-and-dice filters that recompute every total, liabilities in net worth,
-and the excluded-sources list. `/accounts` (the list) now redirects here;
-`/accounts/[slug]` remains the single-account detail view. Verified against
-real data: linking a Monarch source to its Fred account correctly switched
-its live balance to Monarch's fresher value (with a Δ chip explaining the
-$13k month-end-vs-today gap), promoting "Kate 401(k)" created a new
-retirement account owned by Kate, and filtering to Kate recomputed net worth
-to her accounts alone. **Not yet built (Phase 3):** household net-worth
-*series* over time, the property-as-account treatment on `/house`, and
-retiring the deprecated ownership columns on `external_accounts`.
+(`src/lib/household.ts`), and a redesigned `/household` page.
+
+**UX redesign (2026-07-20, after the first cut tested poorly).** The first
+version was technically correct but failed as an experience: it opened on a
+31-row wall of dropdowns (a chore, not your household), split one conceptual
+list into "review queue" vs "roster" purely because a `match_status` column
+exists, never actually *showed* a duplicate being resolved, and spoke in
+model vocabulary ("sources", "provenance", "match status"). The reframe:
+this is the **merge-duplicate-contacts problem**, and that UX is solved.
+Three choices set the direction:
+
+1. **Group by institution.** Duplicates cluster by institution, so
+   mismatches jump out; `canonicalizeInstitution` collapses "Ally Bank"/
+   "Ally" and "Fidelity"/"Fidelity NetBenefits" onto one heading so an
+   account and its synced twin always land together. Each group carries a
+   subtotal.
+2. **Auto-merge the unmistakable, review the rest.** `autoMatchConfident()`
+   links only when the single best match scores ≥ 90 (same institution +
+   shared distinctive token + balance within 2%) *and* no runner-up also
+   clears the bar. On the real backlog this collapsed 31 decisions to 26 by
+   auto-linking 5 Vanguard accounts, and correctly *declined* the genuinely
+   ambiguous ones (Scott's 401(k)→LM at 70 — same account, but the
+   institution reads "Fidelity" vs "LM"; the Ally pairs at 80). Runs after
+   every sync so the queue never rebuilds. Fully reversible: auto-matched
+   rows are tagged in the roster with an `undo`.
+3. **Guided review, one at a time.** A single focused card per decision with
+   the comparison inline and plain-language answers ("Yes, same account" /
+   "No — it's a new account" / "Ignore"), plus skip, back, and a "Show all"
+   escape hatch. Two card variants: a *match* question when there's a
+   candidate, an *add* question when there isn't.
+
+**Making the merge visible** was the other half of the fix. Expanding any
+account row shows each source record side by side with its own value and
+date, which one is `shown`, the reason it won, and `undo` — so a resolved
+duplicate is legible rather than an invisible collapse:
+
+```
+📄 Spreadsheet  as of 2026-05-31                      $1,022,415
+Ⓜ Monarch (Scott Brokerage …5071)  as of 2026-07-20   $1,009,275  shown  undo
+monarch is the highest-priority source for this data and is current (1d old).
+```
+
+A **connectivity badge** on every row answers "what exists and how does it
+relate across sources" at a glance: `📄 + Ⓜ` (both), `Ⓜ Monarch` (synced
+only), `📄 Spreadsheet` (no live feed). Vocabulary is plain throughout; the
+model's terms stay in the code.
+
+`/accounts` (the list) redirects here; `/accounts/[slug]` remains the
+single-account detail view. **Not yet built (Phase 3):** household net-worth
+*series* over time, property-as-account on `/house`, and retiring the
+deprecated ownership columns on `external_accounts`.
 
 ## The problem
 

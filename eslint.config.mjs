@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Cloudflare build output — generated, and linting it fails on minified
+    // vendor code after any `opennextjs-cloudflare build`.
+    ".open-next/**",
+    ".wrangler/**",
   ]),
 ]);
 

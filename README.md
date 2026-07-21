@@ -48,7 +48,9 @@ that already has data — see [docs/SEED.md](docs/SEED.md).
 | `/monthly` | Monthly close checklist — enter statement balances, growth is derived |
 | `/sync` | Provider connection status, sync-now, run history |
 
-The one-time bootstrap and how to seed a real database live in
+Authentication (Cloudflare Access, enforced at the edge with an independent
+token check in the Worker) is in [docs/AUTH.md](docs/AUTH.md). The one-time
+bootstrap and how to seed a real database live in
 [docs/SEED.md](docs/SEED.md); metric definitions and where each number
 originally came from in [docs/ANALYSIS.md](docs/ANALYSIS.md); the external-sync
 architecture (provider abstraction, dedup rules, idempotency) in
@@ -57,6 +59,14 @@ architecture (provider abstraction, dedup rules, idempotency) in
 via OpenNext) is wired — manual account steps are in
 [docs/DEPLOY.md](docs/DEPLOY.md); future-feature thinking lives in
 [docs/ROADMAP.md](docs/ROADMAP.md).
+
+## Access
+
+Deployed, Fred sits behind Cloudflare Access: a one-time PIN emailed to two
+allowlisted addresses, sessions lasting a month, and no login code of its own.
+The Worker independently verifies the Access token on every request and
+refuses to serve anything if Access is unconfigured. `npm run verify:access`
+exercises the verifier against forged, expired and wrong-audience tokens.
 
 ## PWA
 

@@ -1,2 +1,7 @@
+# Skips Cloudflare Access enforcement under `npm run preview`. Remove this line
+# (and set the two CF_ACCESS_* values below) to exercise the real auth path
+# locally — see docs/AUTH.md.
 NEXTJS_ENV=development
 # DATABASE_URL=postgres://... (Neon pooled string, for wrangler preview against Neon)
+# CF_ACCESS_TEAM_DOMAIN=yourteam
+# CF_ACCESS_AUD=<Audience tag from the Access application>

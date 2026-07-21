@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "fred",
-  "main": ".open-next/worker.js",
+  "main": "worker.ts",
   "compatibility_date": "2026-07-01",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "assets": {
@@ -18,5 +18,9 @@
     "enabled": true
   }
   // Secrets (set with `wrangler secret put <NAME>`):
-  //   DATABASE_URL — Neon pooled connection string
+  //   DATABASE_URL           — Neon pooled connection string
+  //   CF_ACCESS_TEAM_DOMAIN  — e.g. "yourteam" (Zero Trust team name)
+  //   CF_ACCESS_AUD          — the Access application's Audience tag
+  // The two CF_ACCESS_* values are required: without them the Worker refuses
+  // to serve anything. See docs/AUTH.md.
 }

@@ -44,29 +44,73 @@ the `DATABASE_URL` secret exists.
    your local copy. Delete/rename `.env` any time you want dev to use the
    local PGlite copy instead.
 
+### 1b. Create the app's own database role (one-time)
+
+The connection string from step 2 belongs to the project's **owner** role
+(`neondb_owner` — named after the database). It can drop tables, create roles
+and reach every database in the project. That is the right credential for
+migrations, and the wrong one to ship to an internet-facing Worker.
+
+So Fred uses two credentials:
+
+| Credential | Lives in | Can do |
+|---|---|---|
+| `neondb_owner` | `.env` on your laptop | everything — `db:push`, `db:seed` |
+| `fred_app` | Worker secret `DATABASE_URL` | SELECT/INSERT/UPDATE/DELETE, nothing else |
+
+The split is natural here because migrations already run from your laptop, not
+from the Worker: Fred does no DDL at runtime, so the deployed app never needs
+permission to change the schema.
+
+6. Open the Neon **SQL Editor** (connected to the `fred` database as the owner
+   role) and run [`scripts/sql/app_role.sql`](../scripts/sql/app_role.sql),
+   after replacing `CHANGE_ME` with a long random password.
+
+   > **Create this role with SQL, not from the Neon Console/CLI/API.** Roles
+   > created through those interfaces are automatically granted membership in
+   > `neon_superuser` — CREATEDB, CREATEROLE, BYPASSRLS, REPLICATION and
+   > read/write on every database. Clicking "Add role" in the dashboard would
+   > give you a second administrator, not a restricted app user. Roles created
+   > with SQL get only default public-schema privileges, which is the point.
+
+   Save that password somewhere safe — Neon does not manage or display
+   passwords for SQL-created roles.
+
+7. Build the Worker's connection string by swapping the credentials in the
+   pooled URL from step 2:
+   ```
+   postgresql://fred_app:<password>@ep-….-pooler.<region>.aws.neon.tech/neondb?sslmode=require
+   ```
+   Keep this one for step 13. Leave `.env` pointing at the owner role.
+
+**If you later add a table**, `npm run db:push` runs as the owner and the new
+table is reachable by `fred_app` automatically — `app_role.sql` sets
+`ALTER DEFAULT PRIVILEGES` for exactly that reason. `npm run verify:dbrole`
+proves it, along with the rest of the boundary.
+
 ### 2. Cloudflare — deploy the Worker (one-time)
 
-6. `npx wrangler login` — browser OAuth into the same Cloudflare account as
+8. `npx wrangler login` — browser OAuth into the same Cloudflare account as
    Corpus.
-7. `npm run deploy` — builds and publishes; prints your
+9. `npm run deploy` — builds and publishes; prints your
    `https://fred.<account>.workers.dev` URL.
 
    The URL will return **500 "Cloudflare Access is not configured"** until
-   step 11. That is deliberate — the Worker will not serve financial data it
+   step 13. That is deliberate — the Worker will not serve financial data it
    cannot attribute to an authorised user, so the app is never briefly open
    while you finish setup.
 
-### 3. Turn on Cloudflare Access (do this before step 4)
+### 3. Turn on Cloudflare Access (before the app can serve anything)
 
-8. Dashboard → **Workers & Pages** → **fred** → **Settings** →
+10. Dashboard → **Workers & Pages** → **fred** → **Settings** →
    **Domains & Routes** → on the `workers.dev` row, click
    **Enable Cloudflare Access**. (This works on `workers.dev`; no custom
    domain needed.)
-9. Click **Manage Cloudflare Access** to open the Zero Trust policy and add
+11. Click **Manage Cloudflare Access** to open the Zero Trust policy and add
    the allowed emails — yours and Kate's. The default login method is a
    one-time PIN emailed to those addresses: nothing to configure, no passwords
    to manage. Zero Trust free covers up to 50 users.
-10. In Zero Trust → **Access** → **Applications** → the app that was just
+12. In Zero Trust → **Access** → **Applications** → the app that was just
     created:
     - set **Session Duration** to **1 month** (the maximum) so the installed
       PWA rarely re-prompts;
@@ -74,14 +118,16 @@ the `DATABASE_URL` secret exists.
 
 ### 4. Set the secrets and go live
 
-11. Set all three, then redeploy:
+13. Set all three, then redeploy:
     ```bash
-    npx wrangler secret put DATABASE_URL           # pooled Neon string
+    npx wrangler secret put DATABASE_URL           # the fred_app string from step 7
     npx wrangler secret put CF_ACCESS_TEAM_DOMAIN  # e.g. "yourteam"
-    npx wrangler secret put CF_ACCESS_AUD          # the AUD tag from step 10
+    npx wrangler secret put CF_ACCESS_AUD          # the AUD tag from step 12
     npm run deploy
     ```
-12. Reload the URL — you should get the Access one-time-PIN prompt, then Fred
+    Note `DATABASE_URL` here is the **`fred_app`** string, not the owner one in
+    your `.env`.
+14. Reload the URL — you should get the Access one-time-PIN prompt, then Fred
     with your data, and your email in the top-right of the header.
 
 Afterwards, each redeploy is just `npm run deploy`.
@@ -110,6 +156,10 @@ Open the workers.dev URL on your phone → Share → **Add to Home Screen**
   remove that line to exercise the real auth path locally.
 - **Auth checks**: `npm run verify:access` proves the token verifier rejects
   forged, expired and wrong-audience tokens. See [AUTH.md](AUTH.md).
+- **Database role check**: `npm run verify:dbrole` builds Fred's schema in a
+  throwaway database, applies `app_role.sql`, and asserts the app role can
+  read and write but cannot DROP, TRUNCATE, ALTER, CREATE TABLE or CREATE
+  ROLE.
 - The monthly-close flow writes to whichever database the app is pointed at.
   Once deployed, do your monthly close in the deployed app (Neon) — the local
   PGlite copy is a dev sandbox, not a mirror.

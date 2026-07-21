@@ -68,6 +68,10 @@ The Worker independently verifies the Access token on every request and
 refuses to serve anything if Access is unconfigured. `npm run verify:access`
 exercises the verifier against forged, expired and wrong-audience tokens.
 
+The deployed app connects to Postgres as a least-privilege role (`fred_app`:
+DML only, no DDL, no role creation); the owning role stays on the laptop for
+migrations. `npm run verify:dbrole` proves the boundary.
+
 ## PWA
 
 `public/manifest.webmanifest` + `public/sw.js` (registered in production

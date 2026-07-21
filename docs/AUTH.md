@@ -132,3 +132,10 @@ unauthenticated `GET` → 401, forged cookie → 401, forged `x-fred-user` heade
   hole in the policy.
 - **Kate's access** is just a second email in the Access policy. Zero Trust
   free covers 50 users.
+- **The database credential is separately confined.** The Worker connects as
+  `fred_app`, which can only SELECT/INSERT/UPDATE/DELETE — it cannot DROP,
+  TRUNCATE, ALTER, create tables or create roles. The owning role never leaves
+  the laptop. So a leaked Worker secret is bad but not destructive, and cannot
+  be escalated into control of the Neon project. See
+  [`scripts/sql/app_role.sql`](../scripts/sql/app_role.sql), step 1b of
+  [DEPLOY.md](DEPLOY.md), and `npm run verify:dbrole`.

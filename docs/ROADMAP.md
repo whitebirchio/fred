@@ -1,6 +1,6 @@
 # Roadmap: thinking beyond the spreadsheets
 
-The spreadsheets answer *"what happened to my accounts?"* An advisor asks
+The spreadsheets Fred replaced answered *"what happened to my accounts?"* An advisor asks
 three more questions: *"are you on track?"*, *"are you efficient?"*, and
 *"what would change the outcome?"* This document maps those questions onto
 data Fred already has, data Monarch has, and what to build. Items are marked
@@ -151,7 +151,7 @@ One number, one source — every metric declares its lineage:
 
 | Domain | System of record | The other side's role |
 |---|---|---|
-| Monthly flow decomposition (contrib/growth/transfer/withdrawal) | **Fred** statements | Monarch can't decompose this reliably — never overwrites |
+| Monthly flow decomposition (contrib/growth/transfer/withdrawal) | **Fred** monthly close | Monarch can't decompose this reliably — never overwrites |
 | Accounts Monarch can't sync (pension, I-Bonds, house equity convention, paystub detail) | **Fred** | — |
 | Household coverage (Kate, joint accounts) | **Monarch** | Fred's schema already models owners; sync fills it |
 | Transactions, spending, categories, budgets | **Monarch** | Fred has nothing here — pure gain |

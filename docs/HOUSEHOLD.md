@@ -42,14 +42,14 @@ date, which one is `shown`, the reason it won, and `undo` — so a resolved
 duplicate is legible rather than an invisible collapse:
 
 ```
-📄 Spreadsheet  as of 2026-05-31                      $1,022,415
+Ⓕ Fred  as of 2026-05-31                              $1,022,415
 Ⓜ Monarch (Scott Brokerage …5071)  as of 2026-07-20   $1,009,275  shown  undo
-monarch is the highest-priority source for this data and is current (1d old).
+Monarch is the highest-priority source for this data and is current (1d old).
 ```
 
 A **connectivity badge** on every row answers "what exists and how does it
-relate across sources" at a glance: `📄 + Ⓜ` (both), `Ⓜ Monarch` (synced
-only), `📄 Spreadsheet` (no live feed). Vocabulary is plain throughout; the
+relate across sources" at a glance: `Ⓕ + Ⓜ` (both), `Ⓜ Monarch` (synced
+only), `Ⓕ only` (no live feed). Vocabulary is plain throughout; the
 model's terms stay in the code.
 
 `/accounts` (the list) redirects here; `/accounts/[slug]` remains the
@@ -60,7 +60,7 @@ deprecated ownership columns on `external_accounts`.
 ## The problem
 
 Today `accounts` does double duty: it is both *Fred's statement data
-container* (born from the spreadsheets, appended by the monthly close) and
+container* (seeded once, appended by the monthly close) and
 *the de-facto canonical account list*. Monarch-only accounts (Kate's, joint,
 liabilities) exist only as `external_accounts` rows with household settings
 bolted onto them, linked by a single nullable pointer. Concretely, right now:
@@ -82,10 +82,10 @@ account — it is *evidence about* an account.**
   account. Facts (balances, transactions, flows, holdings) always stay with
   their source; the hub *resolves* them at read time.
 
-**Fred's own statement entries are just another source** — call it
-`statements`: seeded from the spreadsheets, appended by the monthly close.
-This symmetry is what makes the model scale: `monarch` is a source,
-`statements` is a source, a future Plaid/CSV import is a source. None of
+**Fred's own month-end entries are just another source** — call it `fred`:
+bootstrapped once (docs/SEED.md), appended by the monthly close from then on.
+This symmetry is what makes the model scale: `monarch` is a source, `fred` is
+a source, a future Plaid/CSV import is a source. None of
 them is special-cased in the model; they differ only in what domains they
 can speak to and where they sit in priority order.
 
@@ -116,10 +116,10 @@ authorities — a global per-account winner would force wrong answers:
 
 | Domain | What it is | Default priority | Why |
 |---|---|---|---|
-| `live_balance` | what it's worth now | `monarch → statements` | freshness wins; statements are month-end |
-| `monthly_close` | curated month-end series, flows, growth/tax decomposition | `statements` only | by definition — no provider can decompose flows/tax character; Monarch verifies & prefills (existing features) |
-| `transactions` | spending ledger | `monarch` | statements have none |
-| `holdings` | positions | `monarch` | statements have none |
+| `live_balance` | what it's worth now | `monarch → fred` | freshness wins; Fred's entries are month-end |
+| `monthly_close` | curated month-end series, flows, growth/tax decomposition | `fred` only | by definition — no provider can decompose flows/tax character; Monarch verifies & prefills (existing features) |
+| `transactions` | spending ledger | `monarch` | Fred has none |
+| `holdings` | positions | `monarch` | Fred has none |
 | `identity` | name, category, owner, shares | hub-owned (user) | defaulted from first source, then user-edited |
 
 Resolution algorithm, per (account, domain, as-of):
@@ -130,11 +130,11 @@ Resolution algorithm, per (account, domain, as-of):
    `{ value, source, observedAt, alternatives: [{source, value, observedAt}] }`
 
 The freshness fallback in step 2 is what makes configuration mostly
-unnecessary: Kate's 401(k) has no statements source, so `monarch` wins
-`live_balance` for it with zero setup; Scott's LM 401(k) statements would
+unnecessary: Kate's 401(k) has no `fred` source, so `monarch` wins
+`live_balance` for it with zero setup; Scott's LM 401(k) entries would
 win `monthly_close` because only they exist there. Overrides are for the
 exceptional case ("this account's Monarch feed is broken — trust
-statements"), not the norm.
+Fred's own close"), not the norm.
 
 **Conflicts**: when the winner and a losing source disagree beyond a
 tolerance (±$1 today), that's not an error — it's the verification feature,
@@ -164,7 +164,7 @@ external_accounts (spokes for synced providers)
   linked_account_id                    -- unchanged: the spoke→hub pointer
   (owner/include/share columns stop being read; kept until a later cleanup)
 
-statements source = implicit spoke     -- an accounts row "has" this source
+fred source = implicit spoke           -- an accounts row "has" this source
                                           iff account_entries exist for it
 ```
 
@@ -189,6 +189,11 @@ roster one.
 
 ## The end-to-end experience
 
+> Historical: this was the original Phase-2 proposal. The shipped page groups
+> by **institution** rather than owner, and replaces the review *queue* with
+> guided one-at-a-time review — see the UX redesign notes at the top. The
+> model and resolution rules below are unchanged.
+
 ### `/household` (new page; absorbs `/accounts` and the account-management
 half of `/sync`)
 
@@ -196,9 +201,9 @@ half of `/sync`)
 account row shows:
 - name, owner chip, category
 - resolved current balance **with a provenance badge**: `Ⓜ today` or
-  `📄 Jun 30` — hover/tap explains: *"Monarch, updated today, won
-  live-balance priority. Statements: $22,273 (Jun 30) agrees ✓"*
-- source chips: `📄 Statements ✓` `Ⓜ Monarch ✓auto` — the at-a-glance answer
+  `Ⓕ Jun 30` — hover/tap explains: *"Monarch, updated today, won
+  live-balance priority. Fred: $22,273 (Jun 30) agrees ✓"*
+- source chips: `Ⓕ Fred ✓` `Ⓜ Monarch ✓auto` — the at-a-glance answer
   to "how do I know about this account?"
 - state coloring: quiet when sources agree; amber delta chip when they
   disagree (`Δ $475.42`); "needs review" only in the queue, never silently
@@ -224,7 +229,7 @@ conflicts with both values side by side.
 - Dashboards gain a **lens toggle**: *My view* (today's individual behavior,
   unchanged) / *Household* (resolved roster, assets − liabilities). Every
   resolved number can carry the small provenance badge.
-- Monthly close is untouched — it *is* the statements source's write path.
+- Monthly close is untouched — it *is* the `fred` source's write path.
 
 ## Scaling story (the acceptance test for this design)
 

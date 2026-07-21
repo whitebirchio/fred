@@ -1,7 +1,13 @@
-# Source spreadsheet analysis
+# Source workbook analysis (historical)
 
-What the three workbooks track, how the monthly workflow operates, and how
-that maps onto Fred's data model. Extracted July 2026 from:
+**This is a record of where Fred's seed data came from, not live
+documentation.** The three workbooks were imported once in July 2026 and are
+being retired; Fred owns the data now (see [SEED.md](SEED.md)). Kept because
+it explains how each figure was derived and why the model is shaped the way
+it is.
+
+What the workbooks tracked, how the monthly workflow operated, and how that
+maps onto Fred's data model:
 
 - `Finances (new).xlsx` — the master net-worth workbook (individual)
 - `Pay Stubs.xlsx` — per-paycheck income ledger (individual)
@@ -79,7 +85,8 @@ Shared house ledger since June 2019 ($380,000 purchase, $304,000 loan):
 
 ## Monthly workflow (inferred) → Fred's Monthly close
 
-Once statements arrive (~month end):
+This is the workflow Fred's `/monthly` page replaced. Once statements arrive
+(~month end):
 1. For each active account, add one row: contributions, transfers, withdrawals,
    and growth *as the plug* to match the statement balance.
    → In Fred: enter statement balance + flows; **growth is derived live**.

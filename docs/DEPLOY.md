@@ -18,15 +18,25 @@ assets, with a clear error until the `DATABASE_URL` secret exists.
 2. On the project dashboard, **Connect** → copy the **pooled** connection
    string (host contains `-pooler`).
 3. Locally: `cp .env.example .env` and paste it as `DATABASE_URL=...`.
-4. Load the schema and your imported history into Neon:
+4. Load the schema and bootstrap your history into Neon:
    ```bash
    npm run db:push
    npm run db:seed
    ```
+   Both read `.env`, so they target Neon as soon as `DATABASE_URL` is set. The
+   seed prints where it is about to write — check that it says your Neon host
+   and not `embedded PGlite` before letting it run:
+   ```
+   Target: Postgres at ep-….neon.tech/fred (DATABASE_URL)
+   ```
+   This is a **one-time bootstrap** from the committed `data/seed/*.json`; the
+   `.xlsx` workbooks are not needed and are never read. Afterwards Fred owns
+   the data and the monthly close is what adds to it — running `db:seed`
+   against a populated database is refused. See [SEED.md](SEED.md).
 5. Sanity-check: `npm run dev` now runs against Neon (because `.env` sets
-   `DATABASE_URL`); the Overview should show the same numbers as before.
-   Delete/rename `.env` any time you want dev to use the local PGlite copy
-   instead.
+   `DATABASE_URL`); the Overview should show **$2,403,754.02**, the same as
+   your local copy. Delete/rename `.env` any time you want dev to use the
+   local PGlite copy instead.
 
 ### 2. Cloudflare — deploy the Worker (one-time)
 

@@ -226,7 +226,7 @@ export async function linkSource(formData: FormData) {
  * Promote a source record into a new household account (the additive path).
  * Creates the hub row, copies identity from the source as a starting point,
  * and links the source to it — after this the account is indistinguishable in
- * shape from a spreadsheet-born one, which is the point of the model.
+ * shape from a seeded one, which is the point of the model.
  */
 export async function promoteSource(formData: FormData) {
   const { externalAccounts, accounts: accountsTable, persons: personsTable } =

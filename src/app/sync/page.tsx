@@ -43,16 +43,18 @@ export default async function SyncPage() {
     0,
   );
   const lastRun = runs[0];
-  const unreviewed = externals.filter(
-    (e) => !e.linkedAccountId && !e.includeInHousehold && e.isAsset,
-  ).length;
+  // Match status is the authority on what still needs a decision — the same
+  // number /household shows. (The old count read the deprecated
+  // external_accounts.include_in_household, which is now hub-owned, and so
+  // disagreed with the review queue.)
+  const unreviewed = externals.filter((e) => e.matchStatus === "pending").length;
   const extById = new Map(externals.map((e) => [e.id, e]));
 
   return (
     <div className="space-y-4">
       <PageHeader
         title="Sync"
-        subtitle="External data flows in through a swappable provider; statements stay the system of record"
+        subtitle="External data flows in through a swappable provider; Fred stays the system of record"
         action={
           <form action={syncNow}>
             <button
@@ -132,7 +134,7 @@ export default async function SyncPage() {
 
       <Card
         title="External accounts"
-        subtitle="Link = duplicative with a statement account (verification only); unlinked accounts are additive — opt them into the household total"
+        subtitle="Link = the same real account Fred already tracks (verification only); unlinked accounts are additive — opt them into the household total"
       >
         {externals.length === 0 ? (
           <p className="text-sm text-ink-3">

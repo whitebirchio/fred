@@ -295,8 +295,8 @@ export function MonthlyBarChart({
 }
 
 /**
- * Year-overlay chart (the workbook's "Annual Net *" chart tabs): month on the
- * x-axis, one line per year. Recent years take categorical colors + the
+ * Year-overlay chart: month on the x-axis, one line per year, so seasonality
+ * reads across years at a glance. Recent years take categorical colors + the
  * legend; older years recede to muted gray so 15+ series stay readable.
  */
 export function YearOverlayChart({

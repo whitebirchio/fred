@@ -81,7 +81,7 @@ export function ExternalAccountRow({ external, fredAccounts, people }: Props) {
           disabled={external.linkedAccountId != null}
           title={
             external.linkedAccountId != null
-              ? "Linked accounts are already counted via statements"
+              ? "Linked accounts are already counted through the account they belong to"
               : undefined
           }
         />

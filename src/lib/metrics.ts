@@ -388,7 +388,7 @@ export function annualOverlays(months: MonthPoint[]): {
 }
 
 // ---------------------------------------------------------------------------
-// Income metrics (Pay Stubs workbook)
+// Income metrics — employers, paychecks, withholding
 // ---------------------------------------------------------------------------
 
 export type IncomeYear = {

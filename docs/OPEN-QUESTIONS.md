@@ -9,9 +9,9 @@ Banked 2026-07-19 so they don't get lost. Revisit as needed.
 2. **Monarch Money sync** — the Monarch MCP server is installed but needs
    `MONARCH_TOKEN` set before it can authenticate. Once available, build a sync
    for household balances/transactions (the path to covering Kate's side,
-   which the spreadsheets don't).
+   which the seed data doesn't include).
 
-3. **Household scope for v2** — v1 mirrors the sheets (Scott's individual view;
+3. **Household scope for v2** — v1 mirrored the seed (Scott's individual view;
    Kate appears only in the house ledger). Decide whether v2 adds Kate's
    accounts and a Me / Kate / Household toggle. The schema already supports it
    (persons, `owner_person_id`, `is_joint`, `ownership_share`).

@@ -73,8 +73,8 @@ export const accounts = pgTable("accounts", {
     .notNull()
     .default(1),
   isActive: boolean("is_active").notNull().default(true),
-  // The Finances workbook excludes some holdings (e.g. unvested RSUs, ESPP)
-  // from the net-worth rollup while still tracking them.
+  // Some holdings (e.g. unvested RSUs, ESPP) are tracked but held out of the
+  // net-worth rollup. Seeded from how the original workbook treated them.
   includeInNetWorth: boolean("include_in_net_worth").notNull().default(true),
   // Accounts sharing a group are one plan lineage (e.g. the LM→HS→LM 401(k)
   // rollover chain): the tax-lot engine merges their flows chronologically and
@@ -83,13 +83,13 @@ export const accounts = pgTable("accounts", {
   // than per account).
   taxLotGroup: text("tax_lot_group"),
   // Household lens: whether this account counts toward household rollups.
-  // Distinct from include_in_net_worth, which is the individual (Scott) lens
-  // inherited from the workbook. Default true — "everything in" — because
-  // exclusion is a deliberate act; unreviewed *sources* are held out
-  // separately via external_accounts.match_status, not via this flag.
+  // Distinct from include_in_net_worth, which is the individual (Scott) lens.
+  // Default true — "everything in" — because exclusion is a deliberate act;
+  // unreviewed *sources* are held out separately via
+  // external_accounts.match_status, not via this flag.
   includeInHousehold: boolean("include_in_household").notNull().default(true),
   // Optional per-domain source priority override, e.g.
-  //   { "live_balance": ["statements", "monarch"] }
+  //   { "live_balance": ["fred", "monarch"] }
   // Absent (the norm) = household default order; see src/lib/household.ts.
   resolution: jsonb("resolution"),
   sortOrder: integer("sort_order").notNull().default(0),
@@ -100,8 +100,8 @@ const money = (name: string) =>
   numeric(name, { precision: 14, scale: 2, mode: "number" });
 
 /**
- * One row per account per statement month (mirrors one row of an account tab
- * in the Finances workbook). Balance identity:
+ * One row per account per statement month — Fred's own record, written by the
+ * monthly close and seeded once from the original workbooks. Balance identity:
  *   balance = prev balance + individual + employer + transfersIn + growth
  *             - withdrawals - transfersOut
  * Growth is normally derived as the plug from the entered statement balance.
@@ -226,7 +226,7 @@ export const propertyValuations = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// Income — employers and per-paycheck detail (Pay Stubs workbook)
+// Income — employers and per-paycheck detail
 // ---------------------------------------------------------------------------
 
 export const employers = pgTable("employers", {

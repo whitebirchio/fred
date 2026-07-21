@@ -23,28 +23,41 @@ import {
 /** Data domains resolve independently — see the priority table in the doc. */
 export type Domain = "live_balance" | "monthly_close";
 
-/** Source identifiers. `statements` is Fred's own data, deliberately treated
- *  as just another source so that adding source N+1 changes nothing else. */
-export type SourceId = "statements" | "monarch" | (string & {});
+/** Source identifiers. `fred` is Fred's own month-end record — the entries the
+ *  monthly close writes. It is deliberately modelled as just another source so
+ *  that adding source N+1 changes nothing else.
+ *
+ *  Note this is Fred's data, not a spreadsheet's: the workbooks were a one-time
+ *  bootstrap (see docs/SEED.md) and Fred owns these entries from then on. */
+export type SourceId = "fred" | "monarch" | (string & {});
+
+/** Display names and badge icons, kept here rather than in the UI because
+ *  `resolve()` writes them into its human-readable reason strings. */
+export const SOURCES: Record<string, { label: string; icon: string }> = {
+  fred: { label: "Fred", icon: "Ⓕ" },
+  monarch: { label: "Monarch", icon: "Ⓜ" },
+};
+export const sourceLabel = (id: SourceId) => SOURCES[id]?.label ?? id;
+export const sourceIcon = (id: SourceId) => SOURCES[id]?.icon ?? "◆";
 
 /** Household-wide default priority per domain. Account-level overrides live
  *  in `accounts.resolution`. Freshness fallback means these rarely need
  *  changing: a source that has no data for an account simply loses. */
 export const DEFAULT_PRIORITY: Record<Domain, SourceId[]> = {
-  // Provider feeds update daily; statements are month-end, so the provider
-  // wins "what is it worth now" whenever it has recent data.
-  live_balance: ["monarch", "statements"],
+  // Provider feeds update daily; Fred's own entries are month-end, so the
+  // provider wins "what is it worth now" whenever it has recent data.
+  live_balance: ["monarch", "fred"],
   // No provider can decompose contributions/growth/tax character — that is
-  // the monthly close's whole job, so statements are definitionally
-  // authoritative here.
-  monthly_close: ["statements"],
+  // the monthly close's whole job, so Fred is definitionally authoritative
+  // here and always will be.
+  monthly_close: ["fred"],
 };
 
 /** How stale a source may be before the next priority tier gets a chance.
- *  Generous for statements because a month-end close is expected to lag. */
+ *  Generous for Fred because a month-end close is expected to lag. */
 const STALENESS_DAYS: Record<SourceId, number> = {
   monarch: 10,
-  statements: 45,
+  fred: 45,
 };
 const DEFAULT_STALENESS_DAYS = 45;
 
@@ -119,9 +132,10 @@ export function resolve(
       winner = candidate;
       reason =
         i === 0
-          ? `${candidate.source} is the highest-priority source for this data and is current (${Math.round(age)}d old).`
-          : `${candidate.source} won because ${priority
+          ? `${sourceLabel(candidate.source)} is the highest-priority source for this data and is current (${Math.round(age)}d old).`
+          : `${sourceLabel(candidate.source)} won because ${priority
               .slice(0, i)
+              .map(sourceLabel)
               .join(", ")} had no current data for this account.`;
       break;
     }
@@ -133,7 +147,7 @@ export function resolve(
     winner = [...observations].sort((a, b) =>
       a.observedAt < b.observedAt ? 1 : -1,
     )[0];
-    reason = `All sources are stale; showing the most recent (${winner.source}, ${winner.observedAt}).`;
+    reason = `All sources are stale; showing the most recent (${sourceLabel(winner.source)}, ${winner.observedAt}).`;
   }
 
   const alternatives = observations.filter((o) => o.source !== winner!.source);
@@ -163,7 +177,7 @@ export function resolve(
 
 export type SourceChip = {
   source: SourceId;
-  status: "statements" | "auto" | "confirmed";
+  status: "own" | "auto" | "confirmed";
   value: number;
   observedAt: string;
   externalAccountId?: number;
@@ -172,10 +186,10 @@ export type SourceChip = {
 
 /** How an account is known across sources — the at-a-glance answer to "what
  *  exists and how does it relate", rendered as a badge:
- *   both       — tracked in the spreadsheet AND synced from a provider
- *   provider   — synced only (Kate's, the kids', joint, liabilities)
- *   statements — spreadsheet only, no live feed (older/closed accounts) */
-export type Connectivity = "both" | "provider" | "statements" | "none";
+ *   both     — closed monthly in Fred AND synced from a provider
+ *   provider — synced only, no close history yet (Kate's, joint, liabilities)
+ *   fred     — closed in Fred only, no live feed (older/closed accounts) */
+export type Connectivity = "both" | "provider" | "fred" | "none";
 
 export type HouseholdAccount = {
   id: number;
@@ -505,10 +519,10 @@ export async function loadHousehold(asOf?: string): Promise<HouseholdView> {
 
     const stmt = latestStatement.get(h.id);
     if (stmt) {
-      obs.push({ source: "statements", value: stmt.balance, observedAt: stmt.date });
+      obs.push({ source: "fred", value: stmt.balance, observedAt: stmt.date });
       chips.push({
-        source: "statements",
-        status: "statements",
+        source: "fred",
+        status: "own",
         value: stmt.balance,
         observedAt: stmt.date,
       });
@@ -529,14 +543,14 @@ export async function loadHousehold(asOf?: string): Promise<HouseholdView> {
     const override = (h.resolution as Record<string, SourceId[]> | null)?.live_balance;
     const balance = resolve(obs, override ?? DEFAULT_PRIORITY.live_balance, today);
 
-    const hasProvider = chips.some((c) => c.source !== "statements");
+    const hasProvider = chips.some((c) => c.source !== "fred");
     const connectivity: Connectivity =
       stmt && hasProvider
         ? "both"
         : hasProvider
           ? "provider"
           : stmt
-            ? "statements"
+            ? "fred"
             : "none";
 
     return {

@@ -1,5 +1,19 @@
+// ---------------------------------------------------------------------------
+// One-time bootstrap. See docs/SEED.md.
+//
+// This populates an EMPTY database from data/seed/*.json — committed snapshots
+// extracted once from the original workbooks by scripts/extract_seed.py. The
+// workbooks themselves are not read here and are not needed to run this: once
+// seeded, Fred owns the data and the monthly close is what adds to it.
+//
+// It is deliberately not idempotent-safe-by-default: re-running it would
+// destroy every monthly close entered since. A non-empty database is refused
+// unless --force is passed.
+// ---------------------------------------------------------------------------
+
 import fs from "fs";
 import path from "path";
+import { isNotNull, sql } from "drizzle-orm";
 import { db } from "./index";
 import {
   accountEntries,
@@ -7,6 +21,7 @@ import {
   appConfig,
   contributionLimits,
   employers,
+  externalAccounts,
   paychecks,
   persons,
   properties,
@@ -16,6 +31,38 @@ import {
 } from "./schema";
 
 const seedDir = path.join(process.cwd(), "data", "seed");
+const force = process.argv.includes("--force");
+
+/** Where are we about to write? Host only — never print the credentials. */
+function describeTarget(): string {
+  const url = process.env.DATABASE_URL;
+  if (!url) return "embedded PGlite at .data/pglite (local dev)";
+  try {
+    const u = new URL(url);
+    return `Postgres at ${u.host}${u.pathname} (DATABASE_URL)`;
+  } catch {
+    return "Postgres (DATABASE_URL — unparseable, check the connection string)";
+  }
+}
+
+/** Row counts for everything the seed would overwrite. */
+async function existingCounts(): Promise<Record<string, number>> {
+  const tables = {
+    persons,
+    accounts,
+    account_entries: accountEntries,
+    properties,
+    property_payments: propertyPayments,
+    employers,
+    paychecks,
+  };
+  const out: Record<string, number> = {};
+  for (const [label, table] of Object.entries(tables)) {
+    const [row] = await db.select({ n: sql<number>`count(*)::int` }).from(table);
+    if (row.n > 0) out[label] = row.n;
+  }
+  return out;
+}
 
 function load<T>(name: string): T {
   return JSON.parse(fs.readFileSync(path.join(seedDir, name), "utf8"));
@@ -95,9 +142,43 @@ type SeedEmployer = {
 };
 
 async function main() {
+  console.log(`Target: ${describeTarget()}`);
+  console.log(`Source: data/seed/*.json\n`);
+
+  const existing = await existingCounts();
+  if (Object.keys(existing).length > 0) {
+    const summary = Object.entries(existing)
+      .map(([t, n]) => `${t} ${n.toLocaleString()}`)
+      .join(" · ");
+    if (!force) {
+      console.error(`This database already has data:\n  ${summary}\n`);
+      console.error(
+        "Refusing to overwrite. The seed is a one-time bootstrap — re-running it\n" +
+          "would delete every monthly close entered since.\n\n" +
+          "  To reset this database anyway:  npm run db:seed -- --force",
+      );
+      process.exit(1);
+    }
+    console.log(`--force: wiping existing data first:\n  ${summary}\n`);
+    // external_accounts.linked_account_id has no ON DELETE rule, so links must
+    // be cleared before accounts can go — otherwise the wipe fails halfway and
+    // leaves a half-destroyed database. Unlinking (rather than deleting) keeps
+    // the synced provider records and returns them to the review queue.
+    const relinked = await db
+      .update(externalAccounts)
+      .set({ linkedAccountId: null, matchStatus: "pending" })
+      .where(isNotNull(externalAccounts.linkedAccountId))
+      .returning({ id: externalAccounts.id });
+    if (relinked.length > 0) {
+      console.log(
+        `  unlinked ${relinked.length} external account(s) — they return to the review queue\n`,
+      );
+    }
+  }
+
   console.log("Seeding database…");
 
-  // wipe in dependency order (idempotent re-seed)
+  // wipe in dependency order
   await db.delete(propertyPaymentShares);
   await db.delete(propertyPayments);
   await db.delete(propertyValuations);
@@ -249,7 +330,14 @@ async function main() {
     { key: "planner", value: { paychecksPerYear: 26, traditionalPct: 0.09, rothPct: 0 } },
   ]);
 
-  console.log("Done.");
+  const seeded = await existingCounts();
+  console.log(
+    "\nDone. " +
+      Object.entries(seeded)
+        .map(([t, n]) => `${t} ${n.toLocaleString()}`)
+        .join(" · "),
+  );
+  console.log("Fred owns this data now — add to it via the monthly close.");
 }
 
 main().then(

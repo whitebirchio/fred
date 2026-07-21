@@ -6,8 +6,9 @@ Three design rules drive everything here:
 1. **Encapsulation** — all provider-specific code lives in
    `src/lib/providers/`; the rest of the app sees only Fred's own normalized
    shapes. Swapping Monarch for another system means writing one new adapter.
-2. **Statements stay the system of record.** Synced data verifies, prefills,
-   and extends — it never overwrites `account_entries`.
+2. **Fred stays the system of record.** Synced data verifies, prefills, and
+   extends — it never overwrites `account_entries`, the month-end record the
+   monthly close owns.
 3. **Idempotency** — every write is an upsert keyed by natural identity;
    re-running a sync converges instead of duplicating.
 

@@ -1,6 +1,8 @@
 // Sanity harness for the tax-lot engine: run with `npx tsx scripts/verify_taxlots.ts`.
-// Expected reference values come from the source workbooks (see docs/ANALYSIS.md)
-// and an independent Python simulation of the 401(k) lineage.
+// Expected reference values were taken from the original workbooks at seed time
+// (see docs/ANALYSIS.md) and cross-checked against an independent Python
+// simulation of the 401(k) lineage. They are fixed historical constants — the
+// workbooks are not consulted again.
 import { loadAccounts, loadHouse, houseMonthly, portfolioSeries } from "../src/lib/metrics";
 import { taxLotSeries, TAX_BUCKETS } from "../src/lib/taxlots";
 

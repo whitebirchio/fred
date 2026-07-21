@@ -20,7 +20,7 @@ export default async function SavingsPage() {
   const { months } = portfolioSeries(accts, houseMonths);
   if (months.length === 0) return <p className="text-ink-2">No data yet.</p>;
 
-  // cumulative series (the workbook's Balance/Contributions/Growth/Savings tabs)
+  // cumulative series: balance, contributions, growth, savings
   const cumulative: {
     date: string;
     balance: number;

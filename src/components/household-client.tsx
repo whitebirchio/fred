@@ -12,6 +12,7 @@ import {
   unlinkSource,
   updateHouseholdAccount,
 } from "@/app/actions";
+import { sourceIcon, sourceLabel } from "@/lib/household";
 import type { HouseholdAccount, PendingSource, Connectivity } from "@/lib/household";
 
 // ---------------------------------------------------------------------------
@@ -31,18 +32,18 @@ const CONNECTIVITY: Record<
   { label: string; title: string; tone: string }
 > = {
   both: {
-    label: "📄 + Ⓜ",
-    title: "Tracked in your spreadsheet and synced from Monarch — one account, two sources kept in agreement.",
+    label: "Ⓕ + Ⓜ",
+    title: "Closed monthly in Fred and synced from Monarch — one account, two sources kept in agreement.",
     tone: "text-good",
   },
   provider: {
     label: "Ⓜ Monarch",
-    title: "Synced from Monarch. No spreadsheet history for this account.",
+    title: "Synced from Monarch. No monthly close history in Fred yet.",
     tone: "text-ink-2",
   },
-  statements: {
-    label: "📄 Spreadsheet",
-    title: "From your spreadsheet only — no live feed connected.",
+  fred: {
+    label: "Ⓕ only",
+    title: "Fred's own record only — no live feed connected.",
     tone: "text-ink-3",
   },
   none: { label: "—", title: "No source data.", tone: "text-ink-3" },
@@ -133,8 +134,8 @@ function AccountRow({
                   className="flex items-center justify-between gap-3"
                 >
                   <span className="text-ink-2">
-                    {s.source === "statements" ? "📄 Spreadsheet" : "Ⓜ Monarch"}
-                    {s.externalName && s.source !== "statements" && (
+                    {sourceIcon(s.source)} {sourceLabel(s.source)}
+                    {s.externalName && s.source !== "fred" && (
                       <span className="ml-1 text-ink-3">({s.externalName})</span>
                     )}
                     <span className="ml-2 text-ink-3">as of {s.observedAt}</span>
@@ -225,15 +226,13 @@ function ReviewCard({ p }: { p: PendingSource }) {
   const [pending, start] = useTransition();
   const [targetId, setTargetId] = useState(p.suggestions[0]?.accountId);
   const top = p.suggestions.find((s) => s.accountId === targetId) ?? p.suggestions[0];
-  const isMonarch = p.provider === "monarch";
 
   return (
     <div className="rounded-xl border border-edge bg-surface-2 p-4">
       {/* The incoming record */}
       <div className="text-sm">
         <span className="font-medium text-ink">
-          {isMonarch ? "Ⓜ " : ""}
-          {p.name}
+          {sourceIcon(p.provider)} {p.name}
         </span>
         <span className="ml-2 text-xs text-ink-3">
           {p.institution ?? "—"} · {p.accountType}
@@ -251,7 +250,7 @@ function ReviewCard({ p }: { p: PendingSource }) {
             <span className="h-px flex-1 bg-edge" />
           </div>
           <div className="flex flex-wrap items-center gap-2 text-sm">
-            <span>📄</span>
+            <span title="An account Fred already tracks">{sourceIcon("fred")}</span>
             {p.suggestions.length > 1 ? (
               <select
                 value={targetId}

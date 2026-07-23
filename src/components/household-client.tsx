@@ -21,12 +21,8 @@ import { DeleteAccountControl } from "@/components/delete-account-control";
 // match status"; the UI never does.
 // ---------------------------------------------------------------------------
 
-const catLabel = (c: string) =>
-  CATEGORY_META[c]?.name ??
-  (c === "credit" ? "Credit card" : c === "loan" ? "Loan" : c);
-const catColor = (c: string) =>
-  CATEGORY_META[c]?.color ??
-  (c === "credit" || c === "loan" ? "var(--series-6)" : "var(--series-8)");
+const catLabel = (c: string) => CATEGORY_META[c].name;
+const catColor = (c: string) => CATEGORY_META[c].color;
 
 const CONNECTIVITY: Record<
   Connectivity,

@@ -149,18 +149,26 @@ function AccountRow({
                     ) : (
                       <span className="w-10" />
                     )}
-                    {s.status === "auto" && s.externalAccountId && (
-                      <form action={(fd) => start(() => unlinkSource(fd))}>
-                        <input type="hidden" name="externalAccountId" value={s.externalAccountId} />
-                        <button
-                          className="text-[10px] text-ink-3 hover:text-bad disabled:opacity-50"
-                          disabled={pending}
-                          title="Not the same account? Send it back to review."
-                        >
-                          undo
-                        </button>
-                      </form>
-                    )}
+                    {/* Any linked provider source can be sent back to review —
+                        auto-matched or manually confirmed. Only Fred's own
+                        statements (source "fred") can't be unlinked. */}
+                    {(s.status === "auto" || s.status === "confirmed") &&
+                      s.externalAccountId && (
+                        <form action={(fd) => start(() => unlinkSource(fd))}>
+                          <input type="hidden" name="externalAccountId" value={s.externalAccountId} />
+                          <button
+                            className="text-[10px] text-ink-3 hover:text-bad disabled:opacity-50"
+                            disabled={pending}
+                            title={
+                              s.status === "auto"
+                                ? "Not the same account? Send it back to review."
+                                : "Linked by mistake? Unlink and send it back to review."
+                            }
+                          >
+                            {s.status === "auto" ? "undo" : "unlink"}
+                          </button>
+                        </form>
+                      )}
                   </span>
                 </div>
               );
@@ -388,7 +396,12 @@ function ReviewBand({ pending }: { pending: PendingSource[] }) {
               </button>
             </span>
           </div>
-          <ReviewCard p={p} />
+          {/* key is load-bearing: ReviewCard seeds its target selection from
+              useState(p.suggestions[0]) on mount only. Without a key that
+              changes with the card, React reuses the instance across
+              different pending items, so the first card's target sticks and
+              every subsequent link is submitted against the wrong account. */}
+          <ReviewCard key={p.id} p={p} />
         </div>
       )}
     </Card>

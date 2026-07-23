@@ -1,4 +1,4 @@
-import { and, desc, eq, max, sql } from "drizzle-orm";
+import { desc, eq, inArray, max, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   accountEntries,
@@ -340,6 +340,15 @@ export async function loadSyncState() {
  * For linked external accounts: compare Fred's last statement balance with
  * the provider snapshot nearest that statement date (within a tolerance).
  */
+/**
+ * Batched, not per-account: this used to issue up to 3 sequential queries for
+ * every linked external account, which on Neon's HTTP driver means one
+ * `fetch()` subrequest each. With enough linked accounts that blew past
+ * Cloudflare's 50-subrequest-per-invocation cap (free plan) and 500'd the
+ * whole page — 27 linked accounts alone is 81 subrequests, before the rest of
+ * /sync's own queries. Four bulk queries + an in-memory join scales the same
+ * way regardless of how many accounts are linked.
+ */
 export async function verificationDiffs() {
   const rows = await db
     .select({
@@ -360,35 +369,66 @@ export async function verificationDiffs() {
     snapshotBalance: number | null;
     diff: number | null;
   }[] = [];
+  if (rows.length === 0) return out;
 
-  for (const row of rows) {
-    const [fred] = await db
-      .select()
-      .from(accounts)
-      .where(eq(accounts.id, row.linkedAccountId!));
-    if (!fred) continue;
-    const [lastEntry] = await db
+  const accountIds = [...new Set(rows.map((r) => r.linkedAccountId!))];
+  const externalIds = rows.map((r) => r.externalId);
+
+  const [fredAccounts, entries, snapshots] = await Promise.all([
+    db.select().from(accounts).where(inArray(accounts.id, accountIds)),
+    db
       .select({
+        accountId: accountEntries.accountId,
         statementDate: accountEntries.statementDate,
         balance: accountEntries.balance,
       })
       .from(accountEntries)
-      .where(eq(accountEntries.accountId, fred.id))
-      .orderBy(desc(accountEntries.statementDate))
-      .limit(1);
+      .where(inArray(accountEntries.accountId, accountIds))
+      .orderBy(desc(accountEntries.statementDate)),
+    db
+      .select({
+        externalAccountId: balanceSnapshots.externalAccountId,
+        date: balanceSnapshots.date,
+        balance: balanceSnapshots.balance,
+      })
+      .from(balanceSnapshots)
+      .where(inArray(balanceSnapshots.externalAccountId, externalIds)),
+  ]);
+
+  const fredById = new Map(fredAccounts.map((a) => [a.id, a]));
+  // entries is ordered desc by statementDate, so the first hit per account is
+  // the latest — matches the original per-row `.orderBy(desc).limit(1)`.
+  const lastEntryByAccount = new Map<number, { statementDate: string; balance: number }>();
+  for (const e of entries) {
+    if (!lastEntryByAccount.has(e.accountId)) lastEntryByAccount.set(e.accountId, e);
+  }
+  const snapshotsByExternal = new Map<number, { date: string; balance: number }[]>();
+  for (const s of snapshots) {
+    const arr = snapshotsByExternal.get(s.externalAccountId) ?? [];
+    arr.push(s);
+    snapshotsByExternal.set(s.externalAccountId, arr);
+  }
+
+  const FIVE_DAYS_MS = 5 * 86_400_000;
+  for (const row of rows) {
+    const fred = fredById.get(row.linkedAccountId!);
+    if (!fred) continue;
+    const lastEntry = lastEntryByAccount.get(fred.id);
     if (!lastEntry) continue;
     const { statementDate } = lastEntry;
-    const [snap] = await db
-      .select({ date: balanceSnapshots.date, balance: balanceSnapshots.balance })
-      .from(balanceSnapshots)
-      .where(
-        and(
-          eq(balanceSnapshots.externalAccountId, row.externalId),
-          sql`${balanceSnapshots.date} between (${statementDate}::date - interval '5 days') and (${statementDate}::date + interval '5 days')`,
-        ),
-      )
-      .orderBy(sql`abs(${balanceSnapshots.date} - ${statementDate}::date)`)
-      .limit(1);
+    const target = Date.parse(statementDate);
+
+    // Nearest snapshot within +/-5 days, same tolerance as the original SQL.
+    let snap: { date: string; balance: number } | null = null;
+    let bestDiffMs = Infinity;
+    for (const s of snapshotsByExternal.get(row.externalId) ?? []) {
+      const diffMs = Math.abs(Date.parse(s.date) - target);
+      if (diffMs <= FIVE_DAYS_MS && diffMs < bestDiffMs) {
+        snap = s;
+        bestDiffMs = diffMs;
+      }
+    }
+
     out.push({
       externalName: row.externalName,
       fredName: fred.name,
@@ -404,21 +444,46 @@ export async function verificationDiffs() {
 }
 
 /** Provider snapshot at/near a given month-end for a linked Fred account. */
-export async function snapshotNear(accountId: number, dateISO: string) {
-  const [snap] = await db
-    .select({ date: balanceSnapshots.date, balance: balanceSnapshots.balance })
+/**
+ * Nearest provider snapshot (within 5 days) for every given account at once —
+ * one query regardless of how many account IDs are passed, for the same
+ * subrequest-budget reason as verificationDiffs() above. An account can have
+ * more than one linked source (e.g. an HSA split into cash + investment), so
+ * this keeps whichever candidate lands closest to the target date per
+ * account rather than assuming a 1:1 join.
+ */
+export async function snapshotsNear(
+  accountIds: number[],
+  dateISO: string,
+): Promise<Map<number, { date: string; balance: number }>> {
+  const out = new Map<number, { date: string; balance: number }>();
+  if (accountIds.length === 0) return out;
+
+  const rows = await db
+    .select({
+      linkedAccountId: externalAccounts.linkedAccountId,
+      date: balanceSnapshots.date,
+      balance: balanceSnapshots.balance,
+    })
     .from(balanceSnapshots)
     .innerJoin(
       externalAccounts,
       eq(externalAccounts.id, balanceSnapshots.externalAccountId),
     )
-    .where(
-      and(
-        eq(externalAccounts.linkedAccountId, accountId),
-        sql`${balanceSnapshots.date} between (${dateISO}::date - interval '5 days') and (${dateISO}::date + interval '5 days')`,
-      ),
-    )
-    .orderBy(sql`abs(${balanceSnapshots.date} - ${dateISO}::date)`)
-    .limit(1);
-  return snap ?? null;
+    .where(inArray(externalAccounts.linkedAccountId, accountIds));
+
+  const target = Date.parse(dateISO);
+  const FIVE_DAYS_MS = 5 * 86_400_000;
+  const bestDiffByAccount = new Map<number, number>();
+  for (const r of rows) {
+    if (r.linkedAccountId == null) continue;
+    const diffMs = Math.abs(Date.parse(r.date) - target);
+    if (diffMs > FIVE_DAYS_MS) continue;
+    const bestSoFar = bestDiffByAccount.get(r.linkedAccountId);
+    if (bestSoFar === undefined || diffMs < bestSoFar) {
+      bestDiffByAccount.set(r.linkedAccountId, diffMs);
+      out.set(r.linkedAccountId, { date: r.date, balance: r.balance });
+    }
+  }
+  return out;
 }

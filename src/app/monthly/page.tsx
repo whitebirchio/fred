@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { loadAccounts, loadHouse, houseMonthly } from "@/lib/metrics";
 import { contributionFieldFor } from "@/lib/taxlots";
-import { snapshotNear } from "@/lib/sync";
+import { snapshotsNear } from "@/lib/sync";
 import { CATEGORY_META } from "@/lib/categories";
 import { money, monthEnd, monthLabel } from "@/lib/format";
 import { Card, PageHeader } from "@/components/ui";
@@ -34,15 +34,21 @@ export default async function MonthlyPage({
   const [accts, house] = await Promise.all([loadAccounts(), loadHouse()]);
   const active = accts.filter((a) => a.isActive);
 
-  const rows = await Promise.all(
-    active.map(async (a) => {
-      const entry = a.entries.find((e) => e.statementDate === target) ?? null;
-      const prev = [...a.entries].filter((e) => e.statementDate < target).at(-1);
-      // Synced-provider balance near the target month-end, for prefill/verify
-      const providerSnap = entry ? null : await snapshotNear(a.id, target);
-      return { account: a, entry, prevBalance: prev?.balance ?? 0, providerSnap };
-    }),
-  );
+  // Synced-provider balances near the target month-end, for prefill/verify —
+  // one query for every account still missing a statement, not one query per
+  // account (see snapshotsNear's doc comment for why that distinction matters
+  // on a free-plan Worker).
+  const needingSnapshot = active
+    .filter((a) => !a.entries.some((e) => e.statementDate === target))
+    .map((a) => a.id);
+  const snapshotsByAccount = await snapshotsNear(needingSnapshot, target);
+
+  const rows = active.map((a) => {
+    const entry = a.entries.find((e) => e.statementDate === target) ?? null;
+    const prev = [...a.entries].filter((e) => e.statementDate < target).at(-1);
+    const providerSnap = entry ? null : (snapshotsByAccount.get(a.id) ?? null);
+    return { account: a, entry, prevBalance: prev?.balance ?? 0, providerSnap };
+  });
   const done = rows.filter((r) => r.entry).length;
 
   const houseMonths = house ? houseMonthly(house) : [];

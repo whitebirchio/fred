@@ -16,7 +16,13 @@
   ],
   "observability": {
     "enabled": true
-  }
+  },
+  // Preview URLs (per-version URLs like <version>-fred.workers.dev) aren't
+  // used here — deploys always go straight to the main URL — and Cloudflare
+  // Access doesn't cover them by default (a separate hostname from the one
+  // Access is configured for). worker.ts's own JWT check would still reject
+  // them either way, but there's no reason to leave the extra surface on.
+  "preview_urls": false
   // Secrets (set with `wrangler secret put <NAME>`):
   //   DATABASE_URL           — Neon pooled connection string
   //   CF_ACCESS_TEAM_DOMAIN  — e.g. "yourteam" (Zero Trust team name)

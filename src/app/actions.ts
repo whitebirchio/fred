@@ -105,6 +105,32 @@ export async function deleteEntry(formData: FormData) {
   revalidatePath("/", "layout");
 }
 
+/**
+ * Permanently delete a household account and its statement history.
+ * Irreversible — the confirming UI requires typing the account name.
+ *
+ * Statement entries cascade at the database level (accountEntries.accountId
+ * -> accounts.id ON DELETE CASCADE). Any synced source linked to this account
+ * is explicitly sent back to the review queue first, the same way
+ * unlinkSource does it — a synced Monarch account is evidence about a hub,
+ * never the hub itself, so deleting the hub must not delete or orphan it.
+ */
+export async function deleteAccount(formData: FormData) {
+  const { externalAccounts } = await import("@/db/schema");
+  const accountId = Number(formData.get("accountId"));
+  if (!accountId) throw new Error("Missing account id");
+
+  await db
+    .update(externalAccounts)
+    .set({ linkedAccountId: null, matchStatus: "pending", matchNote: null })
+    .where(eq(externalAccounts.linkedAccountId, accountId));
+
+  await db.delete(accounts).where(eq(accounts.id, accountId));
+
+  revalidatePath("/household");
+  revalidatePath("/", "layout");
+}
+
 export async function addHousePayment(formData: FormData) {
   const propertyId = Number(formData.get("propertyId"));
   const date = String(formData.get("date"));

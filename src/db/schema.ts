@@ -112,7 +112,7 @@ export const accountEntries = pgTable(
     id: serial("id").primaryKey(),
     accountId: integer("account_id")
       .notNull()
-      .references(() => accounts.id),
+      .references(() => accounts.id, { onDelete: "cascade" }),
     statementDate: date("statement_date").notNull(),
     // Individual contributions split by tax character — the dimension that
     // makes Roth-vs-traditional analysis possible. Single-bucket accounts use

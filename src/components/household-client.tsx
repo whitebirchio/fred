@@ -14,6 +14,7 @@ import {
 } from "@/app/actions";
 import { sourceIcon, sourceLabel } from "@/lib/household";
 import type { HouseholdAccount, PendingSource, Connectivity } from "@/lib/household";
+import { DeleteAccountControl } from "@/components/delete-account-control";
 
 // ---------------------------------------------------------------------------
 // Plain-language helpers. The model underneath talks "sources / provenance /
@@ -220,6 +221,10 @@ function AccountRow({
               {pending ? "Saving…" : "Save"}
             </button>
           </form>
+
+          <div className="flex justify-end border-t border-edge pt-2">
+            <DeleteAccountControl accountId={a.id} accountName={a.name} />
+          </div>
         </div>
       )}
     </div>

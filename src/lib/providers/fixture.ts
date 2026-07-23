@@ -1,14 +1,20 @@
-import fs from "node:fs";
-import path from "node:path";
 import type {
   ProviderAccount,
   ProviderHolding,
   ProviderTransaction,
   SyncProvider,
 } from "./types";
+import fixtureData from "../../../data/fixtures/provider-sample.json";
 
 // Synthetic provider for tokenless development and pipeline testing: same
 // contract as any real provider, backed by data/fixtures/provider-sample.json.
+//
+// Imported as a module rather than read via fs at request time: a runtime
+// `fs.readFileSync` has no file to find once bundled into the deployed
+// Worker (there's no filesystem there, only whatever the bundler inlined),
+// so it 500'd instead of behaving like every other provider. A static
+// `import` is a value the bundler can see and inline at build time, so it
+// survives being deployed the same way any other imported constant does.
 
 type FixtureFile = {
   accounts: (Omit<ProviderAccount, "balanceAsOf" | "raw"> & {
@@ -19,8 +25,7 @@ type FixtureFile = {
 };
 
 function load(): FixtureFile {
-  const file = path.join(process.cwd(), "data", "fixtures", "provider-sample.json");
-  return JSON.parse(fs.readFileSync(file, "utf8")) as FixtureFile;
+  return fixtureData as FixtureFile;
 }
 
 export class FixtureProvider implements SyncProvider {

@@ -55,6 +55,25 @@ function autoMatch(
   return candidates.length === 1 ? candidates[0].id : null;
 }
 
+/** Multi-row upserts fail outright if the same conflict key appears twice in
+ *  one statement (Postgres: "ON CONFLICT DO UPDATE command cannot affect row
+ *  a second time") -- collapse to last-write-wins before every bulk write
+ *  below. (Real case this guards: Monarch's trailing daily-balance window can
+ *  land on the same date as the separately-appended "current balance" point
+ *  for the same account.) */
+function dedupeBy<T>(rows: T[], keyFn: (r: T) => string): T[] {
+  const m = new Map<string, T>();
+  for (const r of rows) m.set(keyFn(r), r);
+  return [...m.values()];
+}
+
+// Matches db/seed.ts's bulk-insert chunk size. Keeps each statement's
+// parameter count well under Postgres's limit and, more importantly, keeps
+// the number of subrequests a sync issues small and bounded rather than
+// scaling 1:1 with row count -- see runSync's comment below for why that
+// matters on a free-plan Worker.
+const CHUNK = 500;
+
 export type SyncStats = {
   accounts: number;
   newAccounts: number;
@@ -96,8 +115,21 @@ export async function runSync(provider: SyncProvider): Promise<{
       transactions: 0,
       holdings: 0,
     };
+    const now = new Date().toISOString();
 
     // ---------------------------------------------------------------- accounts
+    //
+    // Every phase below follows the same shape: compute the full set of rows
+    // to write in memory first, then issue a small number of chunked bulk
+    // upserts -- never one write per row. A real sync touches thousands of
+    // rows (snapshots especially: Monarch resends its whole trailing daily-
+    // balance window every time), and Neon's HTTP driver makes each query one
+    // `fetch()` call, which counts as one Cloudflare subrequest. The free
+    // plan caps a single Worker invocation at 50 of those; a per-row loop
+    // blew through it and killed the request mid-sync, leaving a `sync_runs`
+    // row stuck at "running" with whatever had already committed. Chunked
+    // bulk upserts keep the subrequest count small and bounded by data
+    // volume divided by CHUNK, not by row count 1:1.
     const providerAccounts = await provider.fetchAccounts();
     const existing = await db
       .select()
@@ -117,81 +149,89 @@ export async function runSync(provider: SyncProvider): Promise<{
         .filter((id): id is number => id != null),
     );
 
-    const extIdToRowId = new Map<string, number>();
-    const now = new Date().toISOString();
-    for (const pa of providerAccounts) {
-      stats.accounts++;
+    stats.accounts = providerAccounts.length;
+    const dedupedAccounts = dedupeBy(providerAccounts, (pa) => pa.externalId);
+    const accountRows = dedupedAccounts.map((pa) => {
       const prior = existingByExtId.get(pa.externalId);
-      if (prior) {
-        await db
-          .update(externalAccounts)
-          .set({
-            name: pa.name,
-            institution: pa.institution,
-            accountType: pa.accountType,
-            isAsset: pa.isAsset,
-            currentBalance: round2(pa.balance),
-            balanceAsOf: pa.balanceAsOf,
-            isActive: pa.isActive,
-            raw: pa.raw ?? null,
-            lastSeenAt: now,
-          })
-          .where(eq(externalAccounts.id, prior.id));
-        extIdToRowId.set(pa.externalId, prior.id);
-      } else {
+      let linkedAccountId: number | null = prior?.linkedAccountId ?? null;
+      if (!prior) {
         stats.newAccounts++;
-        const linkedAccountId = autoMatch(
-          pa.name,
-          pa.institution,
-          fredAccounts,
-          alreadyLinked,
-        );
-        if (linkedAccountId) {
+        const matched = autoMatch(pa.name, pa.institution, fredAccounts, alreadyLinked);
+        if (matched) {
           stats.autoLinked++;
-          alreadyLinked.add(linkedAccountId);
+          alreadyLinked.add(matched);
+          linkedAccountId = matched;
         }
-        const [row] = await db
-          .insert(externalAccounts)
-          .values({
-            provider: provider.name,
-            externalId: pa.externalId,
-            name: pa.name,
-            institution: pa.institution,
-            accountType: pa.accountType,
-            isAsset: pa.isAsset,
-            currentBalance: round2(pa.balance),
-            balanceAsOf: pa.balanceAsOf,
-            isActive: pa.isActive,
-            linkedAccountId,
-            includeInHousehold: false,
-            raw: pa.raw ?? null,
-          })
-          .returning();
-        extIdToRowId.set(pa.externalId, row.id);
       }
+      return {
+        provider: provider.name,
+        externalId: pa.externalId,
+        name: pa.name,
+        institution: pa.institution,
+        accountType: pa.accountType,
+        isAsset: pa.isAsset,
+        currentBalance: round2(pa.balance),
+        balanceAsOf: pa.balanceAsOf,
+        isActive: pa.isActive,
+        // Only takes effect for a genuine INSERT -- the conflict SET below
+        // deliberately excludes this column, so an existing row's link (or
+        // lack of one) is never touched by a later sync.
+        linkedAccountId,
+        includeInHousehold: false,
+        raw: pa.raw ?? null,
+        lastSeenAt: now,
+      };
+    });
+
+    const extIdToRowId = new Map<string, number>();
+    for (let i = 0; i < accountRows.length; i += CHUNK) {
+      const written = await db
+        .insert(externalAccounts)
+        .values(accountRows.slice(i, i + CHUNK))
+        .onConflictDoUpdate({
+          target: [externalAccounts.provider, externalAccounts.externalId],
+          set: {
+            name: sql`excluded.name`,
+            institution: sql`excluded.institution`,
+            accountType: sql`excluded.account_type`,
+            isAsset: sql`excluded.is_asset`,
+            currentBalance: sql`excluded.current_balance`,
+            balanceAsOf: sql`excluded.balance_as_of`,
+            isActive: sql`excluded.is_active`,
+            raw: sql`excluded.raw`,
+            lastSeenAt: sql`excluded.last_seen_at`,
+            // linkedAccountId, includeInHousehold: deliberately omitted --
+            // user-owned fields, set once at first sight, never overwritten.
+          },
+        })
+        .returning({ id: externalAccounts.id, externalId: externalAccounts.externalId });
+      for (const row of written) extIdToRowId.set(row.externalId, row.id);
     }
 
     // --------------------------------------------------------------- snapshots
-    for (const pa of providerAccounts) {
-      const rowId = extIdToRowId.get(pa.externalId)!;
+    const snapshotRows = dedupedAccounts.flatMap((pa) => {
+      const rowId = extIdToRowId.get(pa.externalId);
+      if (!rowId) return [];
       const points = [
         ...(pa.dailyBalances ?? []),
         { date: pa.balanceAsOf, balance: pa.balance },
       ];
-      for (const p of points) {
-        await db
-          .insert(balanceSnapshots)
-          .values({
-            externalAccountId: rowId,
-            date: p.date,
-            balance: round2(p.balance),
-          })
-          .onConflictDoUpdate({
-            target: [balanceSnapshots.externalAccountId, balanceSnapshots.date],
-            set: { balance: round2(p.balance) },
-          });
-        stats.snapshots++;
-      }
+      return points.map((p) => ({
+        externalAccountId: rowId,
+        date: p.date,
+        balance: round2(p.balance),
+      }));
+    });
+    const dedupedSnapshots = dedupeBy(snapshotRows, (s) => `${s.externalAccountId}|${s.date}`);
+    stats.snapshots = dedupedSnapshots.length;
+    for (let i = 0; i < dedupedSnapshots.length; i += CHUNK) {
+      await db
+        .insert(balanceSnapshots)
+        .values(dedupedSnapshots.slice(i, i + CHUNK))
+        .onConflictDoUpdate({
+          target: [balanceSnapshots.externalAccountId, balanceSnapshots.date],
+          set: { balance: sql`excluded.balance` },
+        });
     }
 
     // ------------------------------------------------------------ transactions
@@ -217,12 +257,11 @@ export async function runSync(provider: SyncProvider): Promise<{
     } catch (err) {
       warnings.push(`transactions: ${asMessage(err)}`);
     }
-    for (const t of txs) {
+    const txRows = txs.flatMap((t) => {
       const accountRowId = extIdToRowId.get(t.accountExternalId);
-      if (!accountRowId) continue; // transaction for an account we don't know
-      await db
-        .insert(externalTransactions)
-        .values({
+      if (!accountRowId) return []; // transaction for an account we don't know
+      return [
+        {
           provider: provider.name,
           externalId: t.externalId,
           externalAccountId: accountRowId,
@@ -235,43 +274,49 @@ export async function runSync(provider: SyncProvider): Promise<{
           notes: t.notes,
           tags: t.tags,
           lastSeenAt: now,
-        })
+        },
+      ];
+    });
+    const dedupedTx = dedupeBy(txRows, (t) => `${t.provider}|${t.externalId}`);
+    stats.transactions = dedupedTx.length;
+    for (let i = 0; i < dedupedTx.length; i += CHUNK) {
+      await db
+        .insert(externalTransactions)
+        .values(dedupedTx.slice(i, i + CHUNK))
         .onConflictDoUpdate({
           target: [externalTransactions.provider, externalTransactions.externalId],
           set: {
-            externalAccountId: accountRowId,
-            date: t.date,
-            amount: round2(t.amount),
-            pending: t.pending,
-            merchant: t.merchant,
-            category: t.category,
-            categoryGroup: t.categoryGroup,
-            notes: t.notes,
-            tags: t.tags,
-            lastSeenAt: now,
+            externalAccountId: sql`excluded.external_account_id`,
+            date: sql`excluded.date`,
+            amount: sql`excluded.amount`,
+            pending: sql`excluded.pending`,
+            merchant: sql`excluded.merchant`,
+            category: sql`excluded.category`,
+            categoryGroup: sql`excluded.category_group`,
+            notes: sql`excluded.notes`,
+            tags: sql`excluded.tags`,
+            lastSeenAt: sql`excluded.last_seen_at`,
           },
         });
-      stats.transactions++;
     }
 
     // ---------------------------------------------------------------- holdings
-    const investmentIds = providerAccounts
+    const investmentIds = dedupedAccounts
       .filter((pa) => INVESTMENT_TYPES.has(pa.accountType))
       .map((pa) => pa.externalId);
     if (investmentIds.length) {
       const asOf = new Date().toISOString().slice(0, 10);
-      let rows: Awaited<ReturnType<typeof provider.fetchHoldings>> = [];
+      let fetched: Awaited<ReturnType<typeof provider.fetchHoldings>> = [];
       try {
-        rows = await provider.fetchHoldings(investmentIds);
+        fetched = await provider.fetchHoldings(investmentIds);
       } catch (err) {
         warnings.push(`holdings: ${asMessage(err)}`);
       }
-      for (const h of rows) {
+      const holdingRows = fetched.flatMap((h) => {
         const accountRowId = extIdToRowId.get(h.accountExternalId);
-        if (!accountRowId) continue;
-        await db
-          .insert(holdings)
-          .values({
+        if (!accountRowId) return [];
+        return [
+          {
             externalAccountId: accountRowId,
             asOf,
             ticker: h.ticker,
@@ -279,17 +324,27 @@ export async function runSync(provider: SyncProvider): Promise<{
             quantity: h.quantity,
             price: h.price,
             value: round2(h.value),
-          })
+          },
+        ];
+      });
+      const dedupedHoldings = dedupeBy(
+        holdingRows,
+        (h) => `${h.externalAccountId}|${h.asOf}|${h.name}`,
+      );
+      stats.holdings = dedupedHoldings.length;
+      for (let i = 0; i < dedupedHoldings.length; i += CHUNK) {
+        await db
+          .insert(holdings)
+          .values(dedupedHoldings.slice(i, i + CHUNK))
           .onConflictDoUpdate({
             target: [holdings.externalAccountId, holdings.asOf, holdings.name],
             set: {
-              ticker: h.ticker,
-              quantity: h.quantity,
-              price: h.price,
-              value: round2(h.value),
+              ticker: sql`excluded.ticker`,
+              quantity: sql`excluded.quantity`,
+              price: sql`excluded.price`,
+              value: sql`excluded.value`,
             },
           });
-        stats.holdings++;
       }
     }
 

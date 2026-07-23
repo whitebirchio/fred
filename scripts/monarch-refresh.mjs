@@ -23,12 +23,12 @@
 // Monarch has no official API; if the login shape has drifted, this prints the
 // raw server response so the payload below can be adjusted (see docs/SYNC.md).
 
-import { createInterface } from "node:readline/promises";
-import { stdin, stdout } from "node:process";
-import { randomUUID } from "node:crypto";
-import { Writable } from "node:stream";
+import { createInterface } from 'node:readline/promises';
+import { stdin, stdout } from 'node:process';
+import { randomUUID } from 'node:crypto';
+import { Writable } from 'node:stream';
 
-const LOGIN_URL = "https://api.monarch.com/auth/login/";
+const LOGIN_URL = 'https://api.monarch.com/auth/login/';
 
 // A stdout wrapper that can suppress echo on demand — the standard technique
 // Node CLI tools (npm, yarn, inquirer) use for password masking, since
@@ -65,30 +65,30 @@ async function secret(question) {
   muted = true;
   let answer;
   try {
-    answer = await rl.question("");
+    answer = await rl.question('');
   } finally {
     muted = false;
   }
-  stdout.write("\n");
+  stdout.write('\n');
   return answer;
 }
 
 const deviceUuid = randomUUID();
 
 const headers = {
-  "Content-Type": "application/json",
-  "device-uuid": deviceUuid,
-  "Client-Platform": "web",
-  "monarch-client": "monarch-core-web-app-graphql",
-  Origin: "https://app.monarch.com",
-  Referer: "https://app.monarch.com/",
-  "User-Agent":
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  'Content-Type': 'application/json',
+  'device-uuid': deviceUuid,
+  'Client-Platform': 'web',
+  'monarch-client': 'monarch-core-web-app-graphql',
+  Origin: 'https://app.monarch.com',
+  Referer: 'https://app.monarch.com/',
+  'User-Agent':
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
 };
 
 async function attempt(body) {
   const res = await fetch(LOGIN_URL, {
-    method: "POST",
+    method: 'POST',
     headers,
     body: JSON.stringify(body),
   });
@@ -104,19 +104,23 @@ async function attempt(body) {
 function looksLikeMfa(status, json) {
   if (status === 403) return true;
   const blob = JSON.stringify(json ?? {}).toLowerCase();
-  return blob.includes("mfa") || blob.includes("multi-factor") || blob.includes("otp");
+  return (
+    blob.includes('mfa') ||
+    blob.includes('multi-factor') ||
+    blob.includes('otp')
+  );
 }
 
-const DEFAULT_APP_URL = "https://fred.whitebirch.workers.dev";
+const DEFAULT_APP_URL = 'https://fred.whitebirch.workers.dev';
 
 function printManualFallback(token, deviceUuid) {
-  stdout.write("\nFalling back to the manual path — add these yourself:\n\n");
+  stdout.write('\nFalling back to the manual path — add these yourself:\n\n');
   stdout.write(`MONARCH_TOKEN=${token}\n`);
   stdout.write(`MONARCH_DEVICE_UUID=${deviceUuid}\n\n`);
   stdout.write(
-    "Locally: put them in .env. Deployed: `npx wrangler secret put MONARCH_TOKEN`\n" +
-      "and `npx wrangler secret put MONARCH_DEVICE_UUID` (these only work as a\n" +
-      "fallback the app checks if it has no database-stored token — see docs/SYNC.md).\n",
+    'Locally: put them in .env. Deployed: `npx wrangler secret put MONARCH_TOKEN`\n' +
+      'and `npx wrangler secret put MONARCH_DEVICE_UUID` (these only work as a\n' +
+      'fallback the app checks if it has no database-stored token — see docs/SYNC.md).\n',
   );
 }
 
@@ -124,33 +128,85 @@ function printManualFallback(token, deviceUuid) {
 // Never throws — any failure degrades to printing the raw values, the same
 // manual path this replaces, so a broken push never strands you.
 async function pushOrFallBack(token, deviceUuid) {
-  const appUrl = (process.env.FRED_APP_URL ?? DEFAULT_APP_URL).replace(/\/$/, "");
-  const headers = { "Content-Type": "application/json" };
-  if (process.env.CF_ACCESS_SERVICE_CLIENT_ID && process.env.CF_ACCESS_SERVICE_CLIENT_SECRET) {
-    headers["CF-Access-Client-Id"] = process.env.CF_ACCESS_SERVICE_CLIENT_ID;
-    headers["CF-Access-Client-Secret"] = process.env.CF_ACCESS_SERVICE_CLIENT_SECRET;
-  } else if (!appUrl.includes("localhost")) {
+  const appUrl = (process.env.FRED_APP_URL ?? DEFAULT_APP_URL).replace(
+    /\/$/,
+    '',
+  );
+  const headers = { 'Content-Type': 'application/json' };
+  if (
+    process.env.CF_ACCESS_SERVICE_CLIENT_ID &&
+    process.env.CF_ACCESS_SERVICE_CLIENT_SECRET
+  ) {
+    headers['CF-Access-Client-Id'] = process.env.CF_ACCESS_SERVICE_CLIENT_ID;
+    headers['CF-Access-Client-Secret'] =
+      process.env.CF_ACCESS_SERVICE_CLIENT_SECRET;
+  } else if (!appUrl.includes('localhost')) {
     stdout.write(
-      "\n⚠ CF_ACCESS_SERVICE_CLIENT_ID/SECRET not set — the deployed app is behind\n" +
-        "Cloudflare Access, so this push will almost certainly be rejected.\n" +
-        "One-time setup: docs/SYNC.md § Keeping the token fresh.\n",
+      '\n⚠ CF_ACCESS_SERVICE_CLIENT_ID/SECRET not set — the deployed app is behind\n' +
+        'Cloudflare Access, so this push will almost certainly be rejected.\n' +
+        'One-time setup: docs/SYNC.md § Keeping the token fresh.\n',
     );
   }
 
+  console.info('HEADERS', headers);
+
   try {
+    // redirect: "manual" is load-bearing. Cloudflare Access rejects an
+    // unauthenticated request with a 302 to its own login page — and that
+    // login page itself returns a normal HTTP 200 HTML document. Node's
+    // fetch() follows redirects by default and reports `ok` on the *final*
+    // response, so a plain `res.ok` check cannot tell "reached the API and
+    // succeeded" apart from "got bounced to Access's sign-in page" — both
+    // look like a 200. Manual mode surfaces the redirect instead of quietly
+    // wandering off to it.
     const res = await fetch(`${appUrl}/api/monarch-credentials`, {
-      method: "POST",
+      method: 'POST',
       headers,
       body: JSON.stringify({ token, deviceUuid }),
+      redirect: 'manual',
     });
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      stdout.write(`\n✗ Push to ${appUrl} failed: HTTP ${res.status} ${text}\n`);
+
+    if (res.status === 0 || (res.status >= 300 && res.status < 400)) {
+      stdout.write(
+        `\n✗ Push to ${appUrl} was redirected (HTTP ${res.status || 'opaque'}) instead of reaching the app —\n` +
+          "Cloudflare Access didn't accept this request as authenticated.\n" +
+          'Check CF_ACCESS_SERVICE_CLIENT_ID/SECRET in .env and that the service\n' +
+          'token has an Allow policy on the Access application (docs/SYNC.md § Keeping\n' +
+          'the token fresh).\n',
+      );
       printManualFallback(token, deviceUuid);
       return;
     }
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      stdout.write(
+        `\n✗ Push to ${appUrl} failed: HTTP ${res.status} ${text}\n`,
+      );
+      printManualFallback(token, deviceUuid);
+      return;
+    }
+
+    // Belt and braces: a 2xx alone doesn't prove this is *my* route — verify
+    // the body actually looks like the response saveMonarchCredentials'
+    // caller returns, not just "some server said OK".
+    let body;
+    try {
+      body = await res.json();
+    } catch {
+      body = null;
+    }
+    if (!body?.ok) {
+      stdout.write(
+        `\n✗ Push to ${appUrl} returned HTTP ${res.status} but not the expected response —\n` +
+          `got: ${JSON.stringify(body).slice(0, 200)}\n`,
+      );
+      printManualFallback(token, deviceUuid);
+      return;
+    }
+
     stdout.write(`\n✓ Token refreshed and pushed to ${appUrl}.\n`);
-    stdout.write("No further steps — the next sync will use it.\n");
+    stdout.write('No further steps — the next sync will use it.\n');
   } catch (err) {
     stdout.write(`\n✗ Could not reach ${appUrl}: ${err.message}\n`);
     printManualFallback(token, deviceUuid);
@@ -158,8 +214,8 @@ async function pushOrFallBack(token, deviceUuid) {
 }
 
 async function main() {
-  const email = await rl.question("Monarch email: ");
-  const password = await secret("Monarch password (hidden): ");
+  const email = await rl.question('Monarch email: ');
+  const password = await secret('Monarch password (hidden): ');
 
   const base = {
     username: email,
@@ -173,9 +229,9 @@ async function main() {
   let { status, json } = await attempt(base);
 
   if (!json?.token && looksLikeMfa(status, json)) {
-    stdout.write("\nMFA required.\n");
+    stdout.write('\nMFA required.\n');
     const code = await rl.question(
-      "Multi-factor code (authenticator app or emailed code): ",
+      'Multi-factor code (authenticator app or emailed code): ',
     );
     ({ status, json } = await attempt({
       ...base,
@@ -194,10 +250,10 @@ async function main() {
   stdout.write(
     `\n✗ Login did not return a token (HTTP ${status}). Raw response:\n`,
   );
-  stdout.write(JSON.stringify(json, null, 2) + "\n\n");
+  stdout.write(JSON.stringify(json, null, 2) + '\n\n');
   stdout.write(
-    "If this shows a CAPTCHA/recaptcha requirement, use the monarchmoney-ts\n" +
-      "or Python monarchmoney library instead (docs/SYNC.md); those handle it.\n",
+    'If this shows a CAPTCHA/recaptcha requirement, use the monarchmoney-ts\n' +
+      'or Python monarchmoney library instead (docs/SYNC.md); those handle it.\n',
   );
   process.exit(1);
 }

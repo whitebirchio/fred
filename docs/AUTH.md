@@ -127,9 +127,13 @@ unauthenticated `GET` → 401, forged cookie → 401, forged `x-fred-user` heade
 - **The service worker** never intercepts `/cdn-cgi/*` and never caches
   redirects or non-`basic` responses, so an expired session cannot get baked
   into the installed PWA's cache.
-- **Automated access.** Access blocks non-browser clients too. If Fred ever
-  needs a cron or external caller, that needs an Access *service token*, not a
-  hole in the policy.
+- **Automated access.** Access blocks non-browser clients too — anything that
+  needs to reach Fred non-interactively needs an Access *service token*, not a
+  hole in the policy. In use since `scripts/monarch-refresh.mjs`, which pushes
+  a freshly-minted Monarch token to `POST /api/monarch-credentials` this way
+  (`CF-Access-Client-Id`/`CF-Access-Client-Secret` headers) rather than
+  requiring a human to click through the login page each time. Setup:
+  [SYNC.md § Keeping the token fresh](SYNC.md#keeping-the-token-fresh--npm-run-monarchrefresh).
 - **Kate's access** is just a second email in the Access policy. Zero Trust
   free covers 50 users.
 - **The database credential is separately confined.** The Worker connects as

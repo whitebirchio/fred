@@ -1,6 +1,7 @@
 import { desc } from "drizzle-orm";
 import { db, externalTransactions, persons } from "@/db";
 import { getProvider } from "@/lib/providers";
+import { monarchCredentialsStatus } from "@/lib/monarch-credentials";
 import { loadSyncState, verificationDiffs } from "@/lib/sync";
 import {
   loadAccounts,
@@ -16,9 +17,10 @@ import { syncNow } from "@/app/actions";
 export const dynamic = "force-dynamic";
 
 export default async function SyncPage() {
-  const provider = getProvider();
-  const [{ externals, runs, allAccounts }, diffs, people, accts, house, recentTx] =
+  const [provider, credStatus, { externals, runs, allAccounts }, diffs, people, accts, house, recentTx] =
     await Promise.all([
+      getProvider(),
+      monarchCredentialsStatus(),
       loadSyncState(),
       verificationDiffs(),
       db.select().from(persons),
@@ -50,6 +52,25 @@ export default async function SyncPage() {
   const unreviewed = externals.filter((e) => e.matchStatus === "pending").length;
   const extById = new Map(externals.map((e) => [e.id, e]));
 
+  // Monarch's token lifetime is undocumented and can be as short as hours —
+  // surface how stale it is rather than let it be a surprise on the next
+  // failed sync. Irrelevant for the fixture provider.
+  const now = new Date();
+  const daysAgo = (iso: string) => {
+    const n = Math.floor((now.getTime() - Date.parse(iso)) / 86_400_000);
+    return n <= 0 ? "today" : `${n}d ago`;
+  };
+  const providerSub =
+    provider.name !== "monarch"
+      ? provider.isConfigured()
+        ? "configured"
+        : "not configured"
+      : !provider.isConfigured()
+        ? "not configured — run `npm run monarch:refresh`"
+        : credStatus.configured
+          ? `refreshed ${daysAgo(credStatus.refreshedAt!)}`
+          : "using fallback env var — run `npm run monarch:refresh`";
+
   return (
     <div className="space-y-4">
       <PageHeader
@@ -68,15 +89,7 @@ export default async function SyncPage() {
       />
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <StatTile
-          label="Provider"
-          value={provider.name}
-          sub={
-            provider.isConfigured()
-              ? "configured"
-              : "not configured — set MONARCH_TOKEN"
-          }
-        />
+        <StatTile label="Provider" value={provider.name} sub={providerSub} />
         <StatTile
           label="Last sync"
           value={

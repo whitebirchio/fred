@@ -10,7 +10,7 @@ import { MonarchProvider } from "../src/lib/providers/monarch";
 async function main() {
   const p = new MonarchProvider();
   if (!p.isConfigured()) {
-    console.error("MONARCH_TOKEN not set — run `npm run monarch:login` first.");
+    console.error("MONARCH_TOKEN not set — run `npm run monarch:refresh` first.");
     process.exit(1);
   }
 

@@ -1,14 +1,24 @@
-// Mint a Monarch Money API token by logging in programmatically.
+// Mint a Monarch Money API token by logging in programmatically, then push it
+// straight into the running app — no manual copy/paste, no wrangler secret
+// commands. Monarch's token lifetime is undocumented and unreliable (reports
+// range from months down to hours), so this is meant to be re-run often
+// enough that a refresh is a non-event.
 //
-// WHY THIS EXISTS: Monarch's web app authenticates with an httpOnly session
-// cookie + CSRF token, so there is no bearer token to copy from the browser's
-// Network tab. API clients instead POST credentials to /auth/login/ and get
-// back a token usable as `Authorization: Token <token>`. This script does
-// exactly that, prompting for your credentials locally — they are sent only to
-// Monarch, never stored, printed, or shared.
+// WHY LOGGING IN LOCALLY STILL EXISTS: Monarch's web app authenticates with an
+// httpOnly session cookie + CSRF token, so there is no bearer token to copy
+// from the browser's Network tab. API clients instead POST credentials to
+// /auth/login/ and get back a token usable as `Authorization: Token <token>`.
+// This script does exactly that, prompting for your credentials locally —
+// they are sent only to Monarch, never stored, printed, logged, or sent
+// anywhere else. Only the resulting TOKEN (not your password) is pushed to
+// the deployed app.
 //
-// Usage: npm run monarch:login
-// Then paste the printed values into .env (MONARCH_TOKEN, MONARCH_DEVICE_UUID).
+// Usage: npm run monarch:refresh
+// Pushes { token, deviceUuid } to FRED_APP_URL (default the production
+// workers.dev URL) via POST /api/monarch-credentials, authenticated with a
+// Cloudflare Access service token — see docs/SYNC.md for the one-time setup.
+// If the push fails for any reason, falls back to printing the raw values so
+// the old manual .env / wrangler secret path still works.
 //
 // Monarch has no official API; if the login shape has drifted, this prints the
 // raw server response so the payload below can be adjusted (see docs/SYNC.md).
@@ -97,6 +107,56 @@ function looksLikeMfa(status, json) {
   return blob.includes("mfa") || blob.includes("multi-factor") || blob.includes("otp");
 }
 
+const DEFAULT_APP_URL = "https://fred.whitebirch.workers.dev";
+
+function printManualFallback(token, deviceUuid) {
+  stdout.write("\nFalling back to the manual path — add these yourself:\n\n");
+  stdout.write(`MONARCH_TOKEN=${token}\n`);
+  stdout.write(`MONARCH_DEVICE_UUID=${deviceUuid}\n\n`);
+  stdout.write(
+    "Locally: put them in .env. Deployed: `npx wrangler secret put MONARCH_TOKEN`\n" +
+      "and `npx wrangler secret put MONARCH_DEVICE_UUID` (these only work as a\n" +
+      "fallback the app checks if it has no database-stored token — see docs/SYNC.md).\n",
+  );
+}
+
+// Pushes the token to the running app instead of making you copy/paste it.
+// Never throws — any failure degrades to printing the raw values, the same
+// manual path this replaces, so a broken push never strands you.
+async function pushOrFallBack(token, deviceUuid) {
+  const appUrl = (process.env.FRED_APP_URL ?? DEFAULT_APP_URL).replace(/\/$/, "");
+  const headers = { "Content-Type": "application/json" };
+  if (process.env.CF_ACCESS_SERVICE_CLIENT_ID && process.env.CF_ACCESS_SERVICE_CLIENT_SECRET) {
+    headers["CF-Access-Client-Id"] = process.env.CF_ACCESS_SERVICE_CLIENT_ID;
+    headers["CF-Access-Client-Secret"] = process.env.CF_ACCESS_SERVICE_CLIENT_SECRET;
+  } else if (!appUrl.includes("localhost")) {
+    stdout.write(
+      "\n⚠ CF_ACCESS_SERVICE_CLIENT_ID/SECRET not set — the deployed app is behind\n" +
+        "Cloudflare Access, so this push will almost certainly be rejected.\n" +
+        "One-time setup: docs/SYNC.md § Keeping the token fresh.\n",
+    );
+  }
+
+  try {
+    const res = await fetch(`${appUrl}/api/monarch-credentials`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ token, deviceUuid }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      stdout.write(`\n✗ Push to ${appUrl} failed: HTTP ${res.status} ${text}\n`);
+      printManualFallback(token, deviceUuid);
+      return;
+    }
+    stdout.write(`\n✓ Token refreshed and pushed to ${appUrl}.\n`);
+    stdout.write("No further steps — the next sync will use it.\n");
+  } catch (err) {
+    stdout.write(`\n✗ Could not reach ${appUrl}: ${err.message}\n`);
+    printManualFallback(token, deviceUuid);
+  }
+}
+
 async function main() {
   const email = await rl.question("Monarch email: ");
   const password = await secret("Monarch password (hidden): ");
@@ -127,12 +187,7 @@ async function main() {
   rl.close();
 
   if (json?.token) {
-    stdout.write("\n✓ Success. Add these to .env:\n\n");
-    stdout.write(`MONARCH_TOKEN=${json.token}\n`);
-    stdout.write(`MONARCH_DEVICE_UUID=${deviceUuid}\n\n`);
-    stdout.write(
-      "Then set FRED_SYNC_PROVIDER=monarch and run a sync from the /sync page.\n",
-    );
+    await pushOrFallBack(json.token, deviceUuid);
     process.exit(0);
   }
 

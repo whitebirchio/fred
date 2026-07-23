@@ -126,34 +126,73 @@ clients rather than the browser. The only way to obtain one is to submit
 credentials to Monarch's login endpoint yourself, the same way the
 `monarchmoney` Python library does it.
 
-**`npm run monarch:login`** does exactly that — prompts for your email and
-password locally (hidden input), POSTs to Monarch's login endpoint with
-`trusted_device: true` for a long-lived token, handles an MFA prompt if one
-comes back, and prints the token plus the device UUID it was minted with.
-Nothing is stored or sent anywhere but Monarch.
+Monarch doesn't document how long a token lasts, and real-world reports vary
+wildly — anywhere from several months (with `trusted_device: true`, which
+this always requests) down to a few hours for some users. So getting a token
+needs to be routine, not an occasional chore.
+
+### Keeping the token fresh — `npm run monarch:refresh`
 
 ```bash
-npm run monarch:login
+npm run monarch:refresh
 # Monarch email: you@example.com
 # Monarch password (hidden): ********
 # Multi-factor code (authenticator app or emailed code): 123456
 #
-# ✓ Success. Add these to .env:
-#
-# MONARCH_TOKEN=…
-# MONARCH_DEVICE_UUID=…
+# ✓ Token refreshed and pushed to https://fred.whitebirch.workers.dev.
+# No further steps — the next sync will use it.
 ```
 
-Set both as:
+One command, run whenever `/sync` shows the token is stale or a sync starts
+failing with `HTTP 401`/`403`. Your email and password are typed locally and
+sent only to Monarch — exactly as before — but instead of printing the token
+for you to copy into `.env` and `wrangler secret put` by hand, the script
+pushes `{ token, deviceUuid }` straight to the running app over HTTPS
+(`POST /api/monarch-credentials`), which stores it in the database
+(`src/lib/monarch-credentials.ts`, keyed into the existing `app_config`
+table). `getProvider()` reads it from there on every sync — no redeploy, no
+Cloudflare secrets involved for routine refreshes.
 
-- local: in `.env`
-- deployed: `npx wrangler secret put MONARCH_TOKEN` and
-  `npx wrangler secret put MONARCH_DEVICE_UUID`
+**Why the database and not a Worker secret**: a Worker secret needs
+`wrangler secret put` — a CLI command with your Cloudflare login — every
+single refresh. Given how often this might need to happen, that overhead adds
+up. The database is just application data the app already reads on every
+request.
 
-Then `/sync` → **Sync now**.
+**Why the password still never touches the deployed app**: only the
+*resulting token* is pushed, not your Monarch credentials. This keeps the
+trust boundary identical to the original design — your password's only
+destination is Monarch's own login endpoint, on your own machine.
+
+**One-time setup** — the push needs to authenticate through Cloudflare
+Access the same as everything else in Fred, so a script (not a person
+clicking through a login page) needs a **service token**:
+
+1. Zero Trust dashboard → **Access** → **Service Auth** → **Create Service
+   Token** (name it e.g. `fred-monarch-refresh`).
+2. Copy the **Client ID** and **Client Secret** — shown once.
+3. Zero Trust → **Access** → **Applications** → the application protecting
+   Fred → **Policies** → add a second policy: **Action: Allow**, rule type
+   **Include** → **Service Token** → select the token you just created.
+   (This is additive — your existing email-based policy for you and Kate is
+   untouched; either policy matching lets a request through.)
+4. In `.env`:
+   ```bash
+   CF_ACCESS_SERVICE_CLIENT_ID=<client id>
+   CF_ACCESS_SERVICE_CLIENT_SECRET=<client secret>
+   ```
+
+Without this, `monarch:refresh` still works end-to-end locally
+(`FRED_APP_URL` unset or pointed at `http://localhost:3000`, where Access
+enforcement doesn't apply), and against the deployed app it fails closed —
+Access rejects the push, and the script falls back to printing the raw
+token/device UUID so you can fall back to the old manual path
+(`wrangler secret put MONARCH_TOKEN` / `MONARCH_DEVICE_UUID` — the provider
+checks those as a fallback if the database has no token). It never silently
+does nothing.
 
 **Caveats:**
-- Monarch actively hardens this login endpoint against non-browser clients
+- Monarch actively hardens the login endpoint against non-browser clients
   (CAPTCHA/reCAPTCHA challenges, header fingerprinting) — the script mirrors
   the real client's headers (`device-uuid`, `monarch-client`, `Origin`,
   `User-Agent`) to reduce friction, but if it still gets blocked, it prints
@@ -166,13 +205,12 @@ Then `/sync` → **Sync now**.
   or its TypeScript port
   [`monarchmoney-ts`](https://github.com/keithah/monarchmoney-ts) is the
   documented escape hatch — any of them mint a token usable here the same way.
-- The token can still expire; if syncs start failing with `HTTP 401`/`403`,
-  re-run `npm run monarch:login` for a fresh one (`MONARCH_TOKEN` in the
-  error message points back here).
 - Monarch's API host moved from `api.monarchmoney.com` to `api.monarch.com`
   at some point — `src/lib/providers/monarch.ts` already points at the
   current host (confirmed against a live HAR capture), but if Monarch moves
   it again, that's the one line to check.
+- `/sync` shows how stale the current token is ("refreshed 3d ago") so a
+  looming expiry is visible before it causes a failed sync, not just after.
 
 A nightly Cloudflare cron trigger can automate the sync call later (free
 tier) — it can't automate re-obtaining the token itself, since that step

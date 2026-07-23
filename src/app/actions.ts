@@ -362,7 +362,7 @@ export async function syncNow() {
   const { getProvider } = await import("@/lib/providers");
   const { runSync } = await import("@/lib/sync");
   const { autoMatchConfident } = await import("@/lib/household");
-  await runSync(getProvider());
+  await runSync(await getProvider());
   // Keep the review queue small: confident duplicates match themselves, so a
   // fresh sync never dumps a wall of obvious pairs on the user.
   await autoMatchConfident();

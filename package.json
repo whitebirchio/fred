@@ -10,7 +10,6 @@
     "db:push": "node --env-file-if-exists=.env node_modules/.bin/drizzle-kit push",
     "db:seed": "node --env-file-if-exists=.env node_modules/.bin/tsx src/db/seed.ts",
     "icons": "node scripts/make-icons.mjs",
-    "monarch:login": "node scripts/monarch-login.mjs",
     "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
     "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
     "upload": "opennextjs-cloudflare build && opennextjs-cloudflare upload",
@@ -20,7 +19,8 @@
     "sync:now": "node --env-file=.env node_modules/.bin/tsx scripts/sync_now.ts",
     "household:backfill": "node --env-file=.env node_modules/.bin/tsx scripts/backfill_household.ts",
     "verify:access": "node node_modules/.bin/tsx scripts/verify_access.ts",
-    "verify:dbrole": "node node_modules/.bin/tsx scripts/verify_db_role.ts"
+    "verify:dbrole": "node node_modules/.bin/tsx scripts/verify_db_role.ts",
+    "monarch:refresh": "node --env-file-if-exists=.env scripts/monarch-refresh.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.4",

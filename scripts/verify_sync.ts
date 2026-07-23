@@ -28,7 +28,7 @@ async function counts() {
 }
 
 async function main() {
-  const p = getProvider();
+  const p = await getProvider();
   console.log("provider:", p.name);
   const r1 = await runSync(p);
   console.log("run 1:", r1.status, JSON.stringify(r1.stats ?? r1.error));

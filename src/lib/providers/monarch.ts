@@ -15,10 +15,12 @@ import type {
 // each fetch degrades independently, and the rest of Fred only ever sees
 // normalized shapes.
 //
-// Auth: a session token in the MONARCH_TOKEN env var — the raw value of the
-// `Authorization: Token <this>` header the web app sends, either lifted from
-// its Network tab or obtained via a community library's login flow. Never
-// logged. See docs/SYNC.md for the step-by-step.
+// Auth: a session token, the raw value of the `Authorization: Token <this>`
+// header the web app sends. In the running app it's loaded from the database
+// (src/lib/monarch-credentials.ts) and passed to the constructor; the
+// MONARCH_TOKEN/MONARCH_DEVICE_UUID env vars are a fallback for local scripts
+// (monarch_probe.ts) that construct this class directly. Never logged. See
+// docs/SYNC.md for how a token is obtained and kept fresh.
 //
 // Monarch migrated its API host from api.monarchmoney.com to api.monarch.com
 // (observed July 2026); community forks that still point at the old host
@@ -57,11 +59,18 @@ type GqlAccount = {
 
 export class MonarchProvider implements SyncProvider {
   readonly name = "monarch";
-  private token = process.env.MONARCH_TOKEN ?? "";
-  // A stable device id the API's abuse layer expects. Any UUID works; set
-  // MONARCH_DEVICE_UUID to reuse the one your login minted the token with.
-  private deviceUuid =
-    process.env.MONARCH_DEVICE_UUID ?? "00000000-0000-4000-8000-000000000000";
+  private token: string;
+  // A stable device id the API's abuse layer expects. Any UUID works; a
+  // refresh reuses the one that specific login minted the token with.
+  private deviceUuid: string;
+
+  constructor(creds?: { token: string; deviceUuid: string }) {
+    this.token = creds?.token ?? process.env.MONARCH_TOKEN ?? "";
+    this.deviceUuid =
+      creds?.deviceUuid ??
+      process.env.MONARCH_DEVICE_UUID ??
+      "00000000-0000-4000-8000-000000000000";
+  }
 
   isConfigured(): boolean {
     return this.token.length > 0;
@@ -94,7 +103,7 @@ export class MonarchProvider implements SyncProvider {
     if (!res.ok) {
       const hint =
         res.status === 401 || res.status === 403
-          ? " (token missing/expired/rejected — mint a fresh MONARCH_TOKEN with `npm run monarch:login`, see docs/SYNC.md)"
+          ? " (token missing/expired/rejected — run `npm run monarch:refresh` for a fresh one, see docs/SYNC.md)"
           : "";
       throw new Error(`Monarch ${operationName} failed: HTTP ${res.status}${hint}`);
     }

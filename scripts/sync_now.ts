@@ -6,7 +6,7 @@ import { getProvider } from "../src/lib/providers";
 import { runSync } from "../src/lib/sync";
 
 async function main() {
-  const provider = getProvider();
+  const provider = await getProvider();
   if (!provider.isConfigured()) {
     console.error(
       `Provider "${provider.name}" is not configured — see docs/SYNC.md.`,

@@ -162,9 +162,10 @@ Open the workers.dev URL on your phone → Share → **Add to Home Screen**
 
 ### Later (when ready)
 
-- `npm run monarch:login`, then `npx wrangler secret put MONARCH_TOKEN` and
-  `npx wrangler secret put MONARCH_DEVICE_UUID` — enables the Monarch sync on
-  `/sync` (see [SYNC.md](SYNC.md) for how the login script works).
+- `npm run monarch:refresh` — logs into Monarch locally and pushes the token
+  straight to the deployed app; enables the sync on `/sync`. One-time setup
+  (a Cloudflare Access service token, so the push can authenticate) and how
+  it stays fresh going forward: [SYNC.md § Keeping the token fresh](SYNC.md#keeping-the-token-fresh--npm-run-monarchrefresh).
 - Custom domain: Worker → Settings → Domains & Routes → Add custom domain
   (requires the domain's DNS on Cloudflare).
 

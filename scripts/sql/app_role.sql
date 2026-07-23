@@ -11,13 +11,24 @@
 -- privileges, which is what we want.
 --
 -- Before running:
---   1. replace CHANGE_ME with a long random password (keep it, Neon will not
---      show it to you again — SQL-created roles have no console-managed
---      password)
+--   1. replace CHANGE_ME with a long random password — ALPHANUMERIC ONLY.
+--      This password gets embedded in a postgresql:// URL (DEPLOY.md step 7),
+--      where @ # % : / ? are all structural characters, not just symbols. A
+--      password containing them produces a connection string that looks
+--      right but fails to parse as a URL — every request throws and the app
+--      500s. Generate a safe one with:
+--        openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 32; echo
+--      Keep the result — Neon will not show it to you again; SQL-created
+--      roles have no console-managed password.
 --   2. replace neondb on the GRANT CONNECT line if your database has another
 --      name
 --
--- Verify the result with: npm run verify:dbrole
+-- Re-running after a partial failure: if the role already exists, skip the
+-- CREATE ROLE line (it errors as a duplicate) and run everything below it —
+-- each GRANT/REVOKE/ALTER DEFAULT PRIVILEGES is safe to repeat.
+--
+-- Verify the result with: npm run verify:dbrole (against a throwaway copy of
+-- the schema) — or just check the count this script prints at the end.
 
 -- ---------------------------------------------------------------------------
 -- The role
@@ -64,3 +75,15 @@ ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER IN SCHEMA public
 
 ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER IN SCHEMA public
   GRANT USAGE, SELECT ON SEQUENCES TO fred_app;
+
+-- ---------------------------------------------------------------------------
+-- Self-check — run as part of the script, not a separate step. If your SQL
+-- editor stops at the first error or only part of the script got pasted, the
+-- CREATE ROLE/ALTER ROLE above can succeed while everything after it silently
+-- doesn't — the role exists but can't touch a single table. That surfaces
+-- later as every page failing to load, not as an error here, so check now:
+-- expect 64. Zero means go back and run the statements above this one again.
+-- ---------------------------------------------------------------------------
+select count(*) as fred_app_table_grants
+from information_schema.role_table_grants
+where grantee = 'fred_app';

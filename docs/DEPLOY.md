@@ -62,9 +62,21 @@ The split is natural here because migrations already run from your laptop, not
 from the Worker: Fred does no DDL at runtime, so the deployed app never needs
 permission to change the schema.
 
-6. Open the Neon **SQL Editor** (connected to the `fred` database as the owner
-   role) and run [`scripts/sql/app_role.sql`](../scripts/sql/app_role.sql),
-   after replacing `CHANGE_ME` with a long random password.
+6. Generate a password — **alphanumeric only**:
+   ```bash
+   openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 32; echo
+   ```
+   This password is about to go inside a `postgresql://` URL, where
+   `@ # % : / ?` are structural characters, not just symbols. A generated
+   password containing one (a raw password-manager password often does) makes
+   the URL parser misread where the password ends and the host begins — the
+   connection string looks fine but fails to parse, and *every* request 500s
+   because every route touches the database. Alphanumeric sidesteps this
+   entirely; no escaping to get right.
+
+7. Open the Neon **SQL Editor** (connected to the `fred` database as the
+   owner role) and run [`scripts/sql/app_role.sql`](../scripts/sql/app_role.sql),
+   replacing `CHANGE_ME` with the password from step 6.
 
    > **Create this role with SQL, not from the Neon Console/CLI/API.** Roles
    > created through those interfaces are automatically granted membership in
@@ -76,12 +88,23 @@ permission to change the schema.
    Save that password somewhere safe — Neon does not manage or display
    passwords for SQL-created roles.
 
-7. Build the Worker's connection string by swapping the credentials in the
+   **Confirm the whole script actually ran** — SQL editors that stop at the
+   first error, or a partial paste, can silently leave you with the role but
+   none of its grants, which surfaces later as every page failing to load
+   rather than as an error here. Run this in the same editor and expect `64`:
+   ```sql
+   select count(*) from information_schema.role_table_grants where grantee = 'fred_app';
+   ```
+   `0` means the `GRANT`/`ALTER DEFAULT PRIVILEGES` statements never ran — go
+   back and run the rest of `app_role.sql` (the `CREATE ROLE` line will error
+   as a duplicate; skip it and run everything below it).
+
+8. Build the Worker's connection string by swapping the credentials in the
    pooled URL from step 2:
    ```
    postgresql://fred_app:<password>@ep-….-pooler.<region>.aws.neon.tech/neondb?sslmode=require
    ```
-   Keep this one for step 13. Leave `.env` pointing at the owner role.
+   Keep this one for step 14. Leave `.env` pointing at the owner role.
 
 **If you later add a table**, `npm run db:push` runs as the owner and the new
 table is reachable by `fred_app` automatically — `app_role.sql` sets
@@ -90,27 +113,27 @@ proves it, along with the rest of the boundary.
 
 ### 2. Cloudflare — deploy the Worker (one-time)
 
-8. `npx wrangler login` — browser OAuth into the same Cloudflare account as
+9. `npx wrangler login` — browser OAuth into the same Cloudflare account as
    Corpus.
-9. `npm run deploy` — builds and publishes; prints your
+10. `npm run deploy` — builds and publishes; prints your
    `https://fred.<account>.workers.dev` URL.
 
    The URL will return **500 "Cloudflare Access is not configured"** until
-   step 13. That is deliberate — the Worker will not serve financial data it
+   step 14. That is deliberate — the Worker will not serve financial data it
    cannot attribute to an authorised user, so the app is never briefly open
    while you finish setup.
 
 ### 3. Turn on Cloudflare Access (before the app can serve anything)
 
-10. Dashboard → **Workers & Pages** → **fred** → **Settings** →
+11. Dashboard → **Workers & Pages** → **fred** → **Settings** →
    **Domains & Routes** → on the `workers.dev` row, click
    **Enable Cloudflare Access**. (This works on `workers.dev`; no custom
    domain needed.)
-11. Click **Manage Cloudflare Access** to open the Zero Trust policy and add
+12. Click **Manage Cloudflare Access** to open the Zero Trust policy and add
    the allowed emails — yours and Kate's. The default login method is a
    one-time PIN emailed to those addresses: nothing to configure, no passwords
    to manage. Zero Trust free covers up to 50 users.
-12. In Zero Trust → **Access** → **Applications** → the app that was just
+13. In Zero Trust → **Access** → **Applications** → the app that was just
     created:
     - set **Session Duration** to **1 month** (the maximum) so the installed
       PWA rarely re-prompts;
@@ -118,16 +141,16 @@ proves it, along with the rest of the boundary.
 
 ### 4. Set the secrets and go live
 
-13. Set all three, then redeploy:
+14. Set all three, then redeploy:
     ```bash
-    npx wrangler secret put DATABASE_URL           # the fred_app string from step 7
+    npx wrangler secret put DATABASE_URL           # the fred_app string from step 8
     npx wrangler secret put CF_ACCESS_TEAM_DOMAIN  # e.g. "yourteam"
-    npx wrangler secret put CF_ACCESS_AUD          # the AUD tag from step 12
+    npx wrangler secret put CF_ACCESS_AUD          # the AUD tag from step 13
     npm run deploy
     ```
     Note `DATABASE_URL` here is the **`fred_app`** string, not the owner one in
     your `.env`.
-14. Reload the URL — you should get the Access one-time-PIN prompt, then Fred
+15. Reload the URL — you should get the Access one-time-PIN prompt, then Fred
     with your data, and your email in the top-right of the header.
 
 Afterwards, each redeploy is just `npm run deploy`.

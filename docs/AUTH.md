@@ -82,7 +82,7 @@ Two secrets, both required in production:
 
 | Secret | Value | Where to find it |
 |---|---|---|
-| `CF_ACCESS_TEAM_DOMAIN` | `yourteam` (or the full `yourteam.cloudflareaccess.com`) | Zero Trust → Settings → Custom Pages, or the URL you log in at |
+| `CF_ACCESS_TEAM_DOMAIN` | `whitebirchsoftware` (or the full `yourteam.cloudflareaccess.com`) | Zero Trust → Settings → Custom Pages, or the URL you log in at |
 | `CF_ACCESS_AUD` | the application's **Audience (AUD) tag** | Zero Trust → Access → Applications → *your app* → Overview |
 
 ```bash

@@ -3,5 +3,5 @@
 # locally — see docs/AUTH.md.
 NEXTJS_ENV=development
 # DATABASE_URL=postgres://... (Neon pooled string, for wrangler preview against Neon)
-# CF_ACCESS_TEAM_DOMAIN=yourteam
+# CF_ACCESS_TEAM_DOMAIN=whitebirchsoftware
 # CF_ACCESS_AUD=<Audience tag from the Access application>

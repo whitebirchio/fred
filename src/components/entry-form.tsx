@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { upsertEntry } from "@/app/actions";
-import { money } from "@/lib/format";
+import { dateLabel, money, monthEnd } from "@/lib/format";
 
 type ContributionField =
   | "contributionsPretax"
@@ -20,12 +20,20 @@ type Field =
 type Props = {
   accountId: number;
   accountName: string;
-  statementDate: string; // default month-end
+  /** Always a month-end date — see `dateMode`. */
+  statementDate: string;
   prevBalance: number;
   // "mixed" (401(k)-style) shows all three tax-character fields; otherwise the
   // single contribution input writes to the account's natural column.
   contributionField: "mixed" | ContributionField;
   defaults?: Partial<Record<Field, number>>;
+  /** How the statement date may be changed:
+   *   fixed — not at all; the surrounding page already chose the month
+   *           (/monthly, where a free date field was only ever a way to
+   *           silently file an entry under the wrong month)
+   *   month — pick a different month; the date still resolves to that
+   *           month's last day, because a close is always a month-end figure */
+  dateMode?: "fixed" | "month";
 };
 
 const LABELS: Record<Field, string> = {
@@ -46,6 +54,7 @@ export function EntryForm({
   prevBalance,
   contributionField,
   defaults,
+  dateMode = "month",
 }: Props) {
   const fields: { key: Field; label: string }[] = [
     { key: "balance", label: LABELS.balance },
@@ -135,17 +144,34 @@ export function EntryForm({
     >
       <input type="hidden" name="accountId" value={accountId} />
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        <label className="block text-xs text-ink-2">
-          Statement date
-          <input
-            type="date"
-            name="statementDate"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            className="mt-1 w-full rounded-lg border border-edge bg-surface px-2 py-1.5 text-sm text-ink"
-            required
-          />
-        </label>
+        {/* A close describes a month, so the control names a month and the
+            stored date is always that month's last day. On /monthly the month
+            is already chosen at the top of the page, so there is nothing to
+            pick here — just a statement of what will be written. */}
+        {dateMode === "fixed" ? (
+          <div className="block text-xs text-ink-2">
+            Statement date
+            <input type="hidden" name="statementDate" value={date} />
+            <p className="mt-1 rounded-lg border border-edge bg-surface-2 px-2 py-1.5 text-sm tabular-nums text-ink">
+              {dateLabel(date)}
+            </p>
+          </div>
+        ) : (
+          <label className="block text-xs text-ink-2">
+            Statement month
+            <input type="hidden" name="statementDate" value={date} />
+            <input
+              type="month"
+              value={date.slice(0, 7)}
+              onChange={(e) => {
+                const [y, mth] = e.target.value.split("-").map(Number);
+                if (y && mth) setDate(monthEnd(y, mth));
+              }}
+              className="mt-1 w-full rounded-lg border border-edge bg-surface px-2 py-1.5 text-sm text-ink"
+              required
+            />
+          </label>
+        )}
         {fields.map((f) => (
           <label key={f.key} className="block text-xs text-ink-2">
             {f.label}
@@ -165,8 +191,8 @@ export function EntryForm({
       </div>
       {retargeted && (
         <p className="rounded-lg border border-bad/40 px-3 py-2 text-xs text-bad">
-          Heads up: this will save to <strong>{date}</strong>, not {statementDate}{" "}
-          — the month you&apos;re viewing.
+          Heads up: this will save to <strong>{dateLabel(date)}</strong>, not{" "}
+          {dateLabel(statementDate)}.
         </p>
       )}
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-surface-2 px-3 py-2 text-sm">

@@ -18,6 +18,7 @@ import {
   weightFor,
 } from "../src/lib/household";
 import { loadAccounts, loadHouse, houseMonthly, portfolioSeries } from "../src/lib/metrics";
+import { monthEnd } from "../src/lib/format";
 import { bucketBalanceOnly, taxLotSeries, TAX_BUCKETS } from "../src/lib/taxlots";
 
 const m = (v: number) =>
@@ -161,6 +162,36 @@ async function main() {
     "no closed account carries a balance",
     closedWithMoney.length === 0,
     closedWithMoney.map((a) => `${a.name} ${m(a.signedBalance)}`).join(", "),
+  );
+
+  // ------------------------------------------------- close entries are monthly
+  // A close describes a month, so each account gets at most one row per month
+  // and that row sits on the month's last day. Two rows in one month would
+  // double-count that month's flows in every series built from them.
+  console.log("\nCLOSE ENTRIES ARE ONE PER MONTH-END");
+  const offCycle: string[] = [];
+  const dupMonths: string[] = [];
+  for (const a of accts) {
+    const seen = new Map<string, number>();
+    for (const e of a.entries) {
+      const [y, mo] = e.statementDate.split("-").map(Number);
+      if (e.statementDate !== monthEnd(y, mo)) {
+        offCycle.push(`${a.name} ${e.statementDate}`);
+      }
+      const ym = e.statementDate.slice(0, 7);
+      seen.set(ym, (seen.get(ym) ?? 0) + 1);
+    }
+    for (const [ym, n] of seen) if (n > 1) dupMonths.push(`${a.name} ${ym} (${n} rows)`);
+  }
+  check(
+    "every entry sits on its month's last day",
+    offCycle.length === 0,
+    offCycle.join(", "),
+  );
+  check(
+    "no account has two entries in one month",
+    dupMonths.length === 0,
+    dupMonths.join(", "),
   );
 
   // ------------------------------------------------------------- tax buckets

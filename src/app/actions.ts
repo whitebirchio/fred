@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { db } from "@/db";
 import { SCOPE_COOKIE } from "@/lib/scope";
+import { monthEnd } from "@/lib/format";
 import {
   accountEntries,
   accounts,
@@ -52,10 +53,16 @@ export async function setScope(formData: FormData) {
  */
 export async function upsertEntry(formData: FormData) {
   const accountId = Number(formData.get("accountId"));
-  const statementDate = String(formData.get("statementDate"));
-  if (!accountId || !/^\d{4}-\d{2}-\d{2}$/.test(statementDate)) {
+  const submitted = String(formData.get("statementDate"));
+  if (!accountId || !/^\d{4}-\d{2}-\d{2}$/.test(submitted)) {
     throw new Error("Missing account or statement date");
   }
+  // A close is a month-end figure by definition, so the month is the only part
+  // of the submitted date that carries meaning — snap it to that month's last
+  // day. Enforcing it here rather than trusting the form means one month can
+  // only ever have one row, whatever a client sends.
+  const [sy, sm] = submitted.split("-").map(Number);
+  const statementDate = monthEnd(sy, sm);
   const balance = num(formData.get("balance"));
   const contributionsPretax = num(formData.get("contributionsPretax"));
   const contributionsRoth = num(formData.get("contributionsRoth"));

@@ -149,6 +149,7 @@ export default async function MonthlyPage({
                 accountId={account.id}
                 accountName={account.name}
                 statementDate={target}
+                dateMode="fixed"
                 prevBalance={prevBalance}
                 contributionField={contributionFieldFor(account)}
                 defaults={

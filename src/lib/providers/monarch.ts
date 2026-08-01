@@ -85,21 +85,36 @@ export class MonarchProvider implements SyncProvider {
     // `Authorization: Token …`. The device-uuid and monarch-client headers
     // mirror the real client so the request isn't rejected as non-browser
     // traffic; no x-csrftoken is needed because token auth isn't CSRF-guarded.
-    const res = await fetch(GRAPHQL_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Token ${this.token}`,
-        "Client-Platform": "web",
-        "device-uuid": this.deviceUuid,
-        "monarch-client": "monarch-core-web-app-graphql",
-        Origin: "https://app.monarch.com",
-        Referer: "https://app.monarch.com/",
-        "User-Agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-      },
-      body: JSON.stringify({ operationName, query, variables }),
-    });
+    let res: Response;
+    try {
+      res = await fetch(GRAPHQL_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Token ${this.token}`,
+          "Client-Platform": "web",
+          "device-uuid": this.deviceUuid,
+          "monarch-client": "monarch-core-web-app-graphql",
+          Origin: "https://app.monarch.com",
+          Referer: "https://app.monarch.com/",
+          "User-Agent":
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        },
+        body: JSON.stringify({ operationName, query, variables }),
+        // Without this, a stalled connection to Monarch hangs indefinitely --
+        // no error, nothing to catch, just a sync_runs row stuck at "running"
+        // forever with no way to tell why. 25s is generous relative to real
+        // timings (a 500-row transactions page took under a second; a 1000-row
+        // page took ~2.5s) while still failing fast enough that a genuine
+        // stall doesn't strand the request.
+        signal: AbortSignal.timeout(25_000),
+      });
+    } catch (err) {
+      if (err instanceof Error && err.name === "TimeoutError") {
+        throw new Error(`Monarch ${operationName} timed out after 25s`);
+      }
+      throw err;
+    }
     if (!res.ok) {
       const hint =
         res.status === 401 || res.status === 403
@@ -178,7 +193,14 @@ export class MonarchProvider implements SyncProvider {
       tags: { name: string }[];
     };
     const out: ProviderTransaction[] = [];
-    const limit = 100;
+    // 500, not 100: each page is one Cloudflare subrequest, and a 2-year
+    // cold-start pull is real -- confirmed against production, 3,952
+    // transactions. At 100/page that's 40 subrequests just for pagination,
+    // which alone leaves no room for the accounts/holdings fetches or the
+    // sync's own database writes inside the free plan's 50-subrequest cap.
+    // 500/page brings the same pull to 8. Verified Monarch's API accepts it
+    // (tested 500 and 1000 directly; both returned the correct totalCount).
+    const limit = 500;
     for (let offset = 0; offset < 5000; offset += limit) {
       // Shape mirrors the web app's own Common_GetTransactionsListDashboard
       // operation (captured from a live session). Two details matter and both

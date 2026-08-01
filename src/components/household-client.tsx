@@ -12,8 +12,19 @@ import {
   unlinkSource,
   updateHouseholdAccount,
 } from "@/app/actions";
-import { sourceIcon, sourceLabel } from "@/lib/household";
-import type { HouseholdAccount, PendingSource, Connectivity } from "@/lib/household";
+import {
+  exclusionLabel,
+  rollup,
+  sourceIcon,
+  sourceLabel,
+  weightFor,
+} from "@/lib/household";
+import type {
+  HouseholdAccount,
+  PendingSource,
+  Connectivity,
+  Scope,
+} from "@/lib/household";
 import { DeleteAccountControl } from "@/components/delete-account-control";
 
 // ---------------------------------------------------------------------------
@@ -74,7 +85,7 @@ function AccountRow({
   const autoChip = a.sources.find((s) => s.status === "auto");
 
   return (
-    <div className={`border-t border-edge ${a.includeInHousehold ? "" : "opacity-45"}`}>
+    <div className={`border-t border-edge ${a.exclusion ? "opacity-45" : ""}`}>
       <button
         onClick={() => setOpen((o) => !o)}
         className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 py-2 text-left"
@@ -95,6 +106,32 @@ function AccountRow({
             title="Automatically matched because it was an unmistakable duplicate. Open to undo."
           >
             auto-matched
+          </span>
+        )}
+        {a.exclusion && (
+          <span
+            className="rounded bg-surface-2 px-1.5 py-0.5 text-[10px] text-ink-3"
+            title="Tracked, but held out of net worth. Open to change."
+          >
+            {exclusionLabel(a.exclusion).toLowerCase()} · not counted
+          </span>
+        )}
+        {a.staleness && (
+          <span
+            className="rounded bg-surface-2 px-1.5 py-0.5 text-[10px] text-bad"
+            title={a.balance.reason}
+          >
+            {a.staleness.connectionStatus === "broken"
+              ? "connection broken"
+              : `${a.staleness.days}d old`}
+          </span>
+        )}
+        {!a.isActive && (
+          <span
+            className="rounded bg-surface-2 px-1.5 py-0.5 text-[10px] text-ink-3"
+            title="Closed — counts as $0 today; its history is kept."
+          >
+            closed
           </span>
         )}
         <span className="ml-auto flex items-center gap-2">
@@ -182,12 +219,25 @@ function AccountRow({
           >
             <input type="hidden" name="accountId" value={a.id} />
             <label className="flex items-center gap-1.5">
+              Counts toward net worth
+              <select
+                name="exclusion"
+                defaultValue={a.exclusion ?? ""}
+                className="rounded border border-edge bg-surface px-1.5 py-1 text-xs text-ink"
+              >
+                <option value="">Yes</option>
+                <option value="primary_residence">No — home &amp; mortgage</option>
+                <option value="unvested">No — not vested yet</option>
+                <option value="other">No — set aside</option>
+              </select>
+            </label>
+            <label className="flex items-center gap-1.5" title="Whether the monthly close asks you for a statement here.">
               <input
                 type="checkbox"
-                name="includeInHousehold"
-                defaultChecked={a.includeInHousehold}
+                name="tracksMonthlyClose"
+                defaultChecked={a.tracksMonthlyClose}
               />
-              Count in household
+              In monthly close
             </label>
             <label className="flex items-center gap-1.5">
               Owner
@@ -418,11 +468,15 @@ export function HouseholdClient({
   pending,
   ignored,
   people,
+  scope,
+  primaryPersonId,
 }: {
   accounts: HouseholdAccount[];
   pending: PendingSource[];
   ignored: { id: number; name: string; note: string | null }[];
   people: { id: number; name: string; isPrimary: boolean }[];
+  scope: Scope;
+  primaryPersonId: number | null;
 }) {
   const [q, setQ] = useState("");
   const [owner, setOwner] = useState("all");
@@ -438,9 +492,17 @@ export function HouseholdClient({
     [accounts],
   );
 
+  // The global scope decides membership; these controls only narrow what is
+  // *shown* within it. Keeping the two separate is what lets the unfiltered
+  // total here equal the one on Overview.
+  const inScope = useMemo(
+    () => accounts.filter((a) => weightFor(a, scope, primaryPersonId) > 0),
+    [accounts, scope, primaryPersonId],
+  );
+
   const visible = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return accounts.filter((a) => {
+    return inScope.filter((a) => {
       if (owner !== "all" && a.ownerName !== owner) return false;
       if (category !== "all" && a.category !== category) return false;
       if (hideEmpty && (a.balance.value ?? 0) === 0) return false;
@@ -451,18 +513,14 @@ export function HouseholdClient({
         return false;
       return true;
     });
-  }, [accounts, q, owner, category, hideEmpty]);
+  }, [inScope, q, owner, category, hideEmpty]);
 
-  const totals = useMemo(() => {
-    let assets = 0;
-    let liabilities = 0;
-    for (const a of visible) {
-      if (!a.includeInHousehold || a.balance.value == null) continue;
-      if (a.isLiability) liabilities += Math.abs(a.balance.value);
-      else assets += a.balance.value;
-    }
-    return { assets, liabilities, net: assets - liabilities };
-  }, [visible]);
+  // Exactly the function every other screen calls — no second implementation
+  // to drift out of step with the first.
+  const totals = useMemo(
+    () => rollup(visible, scope, primaryPersonId),
+    [visible, scope, primaryPersonId],
+  );
 
   // Group by institution, biggest first.
   const groups = useMemo(() => {
@@ -474,15 +532,12 @@ export function HouseholdClient({
     }
     const arr = [...m.entries()].map(([label, list]) => {
       list.sort((x, y) => Math.abs(y.balance.value ?? 0) - Math.abs(x.balance.value ?? 0));
-      const subtotal = list.reduce(
-        (s, a) => s + (a.includeInHousehold ? a.signedBalance : 0),
-        0,
-      );
+      const subtotal = rollup(list, scope, primaryPersonId).net;
       return { label, list, subtotal };
     });
     arr.sort((a, b) => Math.abs(b.subtotal) - Math.abs(a.subtotal));
     return arr;
-  }, [visible]);
+  }, [visible, scope, primaryPersonId]);
 
   const sliced = owner !== "all" || category !== "all" || q.trim() !== "";
 
@@ -492,7 +547,7 @@ export function HouseholdClient({
         <StatTile
           label="Net worth"
           value={money(totals.net)}
-          sub={sliced ? "this slice" : "everything included"}
+          sub={sliced ? "this slice only" : "matches Overview"}
         />
         <StatTile label="Assets" value={money(totals.assets)} />
         <StatTile
@@ -500,12 +555,34 @@ export function HouseholdClient({
           value={totals.liabilities ? `−${money(totals.liabilities)}` : "$0"}
           deltaGood={totals.liabilities ? false : undefined}
         />
+        {/* Rows on screen vs rows in the total are legitimately different
+            numbers (excluded accounts still show). Say both rather than let
+            one look like a miscount of the other. */}
         <StatTile
           label="Accounts"
           value={String(visible.length)}
-          sub={pending.length ? `${pending.length} to review` : "all reviewed"}
+          sub={
+            totals.counted !== visible.length
+              ? `${totals.counted} counted · ${visible.length - totals.counted} excluded`
+              : pending.length
+                ? `${pending.length} to review`
+                : "all reviewed"
+          }
         />
       </div>
+
+      {totals.excluded.length > 0 && (
+        <p className="text-xs text-ink-3">
+          Not counted above:{" "}
+          {totals.excluded
+            .map(
+              (e) =>
+                `${exclusionLabel(e.reason).toLowerCase()} ${money(e.net)} (${e.count} account${e.count === 1 ? "" : "s"})`,
+            )
+            .join(" · ")}
+          .
+        </p>
+      )}
 
       <ReviewBand pending={pending} />
 

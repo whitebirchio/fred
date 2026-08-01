@@ -176,6 +176,13 @@ account in the household — Scott's, Kate's, joint, liabilities — is one
 
 ### The house and the mortgage
 
+> **Superseded by Phase 3 (2026-08-01).** The house is now a real household
+> account backed by the property ledger, and the mortgage is a normal
+> liability account; both carry `exclusion = 'primary_residence'` so the pair
+> is held out of net worth *together*. See "Phase 3" below for why the
+> original approach was abandoned. The paragraph below is kept as the record
+> of what was believed at the time.
+
 Fred already nets the mortgage inside the even-split equity convention
 (equity = market value − loan, ÷2). So Monarch's mortgage account and
 Zestimate must **not** enter the roster as independent accounts — that would
@@ -294,7 +301,117 @@ this property, it's the wrong feature shape.
    unlinked rows would inflate net worth by roughly a million dollars.
    Reviewed → included by default; pending → excluded and visibly flagged.
 
+## Phase 3 — one calculation, every screen (shipped 2026-08-01)
+
+The symptom: net worth on `/household` disagreed with net worth on Overview.
+The cause was not a bug in either — they were computing **different things**,
+and both were defensible in isolation:
+
+| | Overview | `/household` |
+|---|---|---|
+| Membership | `include_in_net_worth` (19 of 35) | `include_in_household` (35 of 35) |
+| Balances | Fred month-end entries, carried forward | live resolved (Monarch preferred) |
+| Liabilities | none (all flagged out) | counted, signed |
+| House | ½ equity from the ledger | absent — but the mortgage was counted |
+
+They happened to land $12k apart, which made the disagreement look like a
+rounding problem rather than two different questions. Three real defects hid
+underneath:
+
+1. **`/household` counted the mortgage but had no house.** Net worth was
+   short an entire asset while carrying its debt.
+2. **`portfolioSeries` added liabilities positively.** Latent only because
+   every liability happened to be filtered out of that view.
+3. **`include_in_net_worth` meant two things at once** — "isn't Scott's"
+   *and* "deliberately excluded" — so ownership and exclusion could not be
+   varied independently.
+
+### What replaced it
+
+**One rollup.** `rollup()` in `src/lib/household.ts` computes every
+net-worth, asset and liability figure in the app, over the resolved balances
+from `loadHousehold()`. No page computes a total of its own. This is the
+structural guarantee: two screens can only disagree if they compute
+separately, so nothing else is permitted to.
+
+**Scope, not lenses.** A single cookie-backed selector (`src/lib/scope.ts`,
+read server-side in the root layout) chooses whose money is on screen:
+Everyone, a person, or Joint. Everyone counts everything at 100%; a person
+counts their own accounts whole plus `ownership_share` of anything joint.
+Because joint accounts split evenly, **the per-person totals sum exactly to
+the household total** — an invariant `scripts/verify_consistency.ts` asserts,
+and the thing that makes the filter trustworthy rather than merely
+suggestive.
+
+**Exclusion is one column with a reason.** `accounts.exclusion` is null when
+an account counts, else says why (`primary_residence`, `unvested`, `other`).
+Ownership lives entirely in `owner_person_id` / `is_joint` /
+`ownership_share`. `include_in_net_worth` and `include_in_household` are
+retained but no longer read.
+
+**The house is an account again — and excluded by default.** Reversing the
+Phase-0 decision: modelling the home as "not an account" is what left the
+roster showing a mortgage with nothing behind it. It is now an `accounts` row
+with `property_id` pointing at the ledger that supplies its value, and the
+mortgage is a normal liability with a second `fred` source from the same
+ledger. Both carry `exclusion = 'primary_residence'`, so the default net
+worth omits **the equity**, not just the asset — you always need somewhere to
+live, and counting the debt without the house would be more pessimistic than
+intended, not less. One toggle includes the pair for when the property
+becomes an investment. The old "permanently special category" conclusion was
+right about the *economics* and wrong about the *modelling*.
+
+**Balances live, flows month-end.** Current-value figures resolve as of
+today; charts, savings, growth and tax lots come from the monthly close.
+Balance-only accounts (Kate's, the liabilities) contribute balances
+everywhere and flows nowhere, and the pages that depend on flows say so
+rather than implying those accounts grew by zero. `tracks_monthly_close`
+keeps them out of the close checklist.
+
+**Closed means zero.** An inactive account contributes nothing to today's
+totals; its history is untouched. This required correcting three accounts
+that had been marked inactive to mean "I don't use this much" while still
+holding money.
+
+### The freshness bug this uncovered
+
+The resolution engine's staleness fallback — the mechanism that demotes a
+stale source — **had never once fired.** `MonarchProvider.fetchAccounts()`
+set `balanceAsOf` to *today* for every account unconditionally, so every
+Monarch observation claimed to be 0 days old and always won priority. The UI
+rendered "Monarch is the highest-priority source and is current (0d old)" on
+data that was months stale.
+
+Monarch exposes the real signal, and it is not `updatedAt` (which moves when
+any field changes): **`displayLastUpdatedAt`** is when the balance was last
+refreshed. Verified against the live API — the HSA investments row reported
+`updatedAt` 90d but `displayLastUpdatedAt` 277d, and 277d was the truth.
+`credential.updateRequired` gives the categorical version: this connection
+is broken, go re-authenticate. Both are now captured
+(`external_accounts.connection_status`), a broken feed can never win on
+freshness however recent its timestamp claims to be, and the reason strings
+name the loser and why ("Monarch lost its connection to this institution on
+… and needs reconnecting").
+
+Effect on real data: LM Pension moved from Monarch's stale $67,304 to Fred's
+$72,410, I-Bonds likewise, and Kate's 401(k) — which has no Fred source —
+stopped claiming to be current and now reports honestly that its connection
+is broken.
+
+### Guarding it
+
+`scripts/verify_consistency.ts` re-derives each page's headline the way that
+page derives it and asserts they match, plus the invariants above: scope
+shares summing to the whole, the home pair moving together, liabilities
+signed, closed accounts at zero, and every investable dollar landing in a tax
+bucket. Run it after any change to resolution or rollup.
+
 ## Open questions
 
 - Does the primary-residence-vs-investment-property distinction want an
   explicit flag now, or wait until an investment property actually exists?
+  (Partly answered: `exclusion = 'primary_residence'` *is* that flag — an
+  investment property would simply carry no exclusion.)
+- Monarch's `displayLastUpdatedAt` is trusted as balance freshness. If it
+  ever proves to move for non-balance reasons, `credential.updateRequired`
+  is the more conservative signal to lean on.

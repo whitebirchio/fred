@@ -173,6 +173,8 @@ export async function runSync(provider: SyncProvider): Promise<{
         currentBalance: round2(pa.balance),
         balanceAsOf: pa.balanceAsOf,
         isActive: pa.isActive,
+        connectionStatus: pa.connectionStatus,
+        disconnectedAt: pa.disconnectedAt ?? null,
         // Only takes effect for a genuine INSERT -- the conflict SET below
         // deliberately excludes this column, so an existing row's link (or
         // lack of one) is never touched by a later sync.
@@ -198,6 +200,8 @@ export async function runSync(provider: SyncProvider): Promise<{
             currentBalance: sql`excluded.current_balance`,
             balanceAsOf: sql`excluded.balance_as_of`,
             isActive: sql`excluded.is_active`,
+            connectionStatus: sql`excluded.connection_status`,
+            disconnectedAt: sql`excluded.disconnected_at`,
             raw: sql`excluded.raw`,
             lastSeenAt: sql`excluded.last_seen_at`,
             // linkedAccountId, includeInHousehold: deliberately omitted --

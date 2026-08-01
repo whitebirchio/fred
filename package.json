@@ -18,6 +18,7 @@
     "sync:state": "node --env-file=.env node_modules/.bin/tsx scripts/db_state.ts",
     "sync:now": "node --env-file=.env node_modules/.bin/tsx scripts/sync_now.ts",
     "household:backfill": "node --env-file=.env node_modules/.bin/tsx scripts/backfill_household.ts",
+    "verify:consistency": "node --env-file-if-exists=.env node_modules/.bin/tsx scripts/verify_consistency.ts",
     "verify:access": "node node_modules/.bin/tsx scripts/verify_access.ts",
     "verify:dbrole": "node node_modules/.bin/tsx scripts/verify_db_role.ts",
     "monarch:refresh": "node --env-file-if-exists=.env scripts/monarch-refresh.mjs"

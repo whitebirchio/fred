@@ -50,7 +50,23 @@ type GqlAccount = {
   displayBalance: number | null;
   isAsset: boolean;
   deactivatedAt: string | null;
+  // Two different clocks, and the distinction matters (verified against the
+  // live API, July 2026): `updatedAt` moves whenever the account *record*
+  // changes, while `displayLastUpdatedAt` is when the *balance* was last
+  // refreshed from the institution — the figure Monarch's own UI shows.
+  // A real example from this account: the HSA investments row reported
+  // updatedAt 90d but displayLastUpdatedAt 277d, and 277d was the truth.
   updatedAt: string;
+  displayLastUpdatedAt: string | null;
+  syncDisabled: boolean | null;
+  isManual: boolean | null;
+  // Absent on manual accounts. `updateRequired` is Monarch's "you need to
+  // re-authenticate with this institution" flag — the categorical version of
+  // the staleness that displayLastUpdatedAt measures.
+  credential: {
+    updateRequired: boolean | null;
+    disconnectedFromDataProviderAt: string | null;
+  } | null;
   institution: { name: string } | null;
   type: { name: string } | null;
   subtype: { name: string } | null;
@@ -142,6 +158,13 @@ export class MonarchProvider implements SyncProvider {
           isAsset
           deactivatedAt
           updatedAt
+          displayLastUpdatedAt
+          syncDisabled
+          isManual
+          credential {
+            updateRequired
+            disconnectedFromDataProviderAt
+          }
           institution { name }
           type { name }
           subtype { name }
@@ -155,8 +178,31 @@ export class MonarchProvider implements SyncProvider {
         type: a.type?.name ?? "other",
         isAsset: a.isAsset,
       };
+      // The balance is only as current as the institution feed behind it.
+      // Prefer Monarch's own balance-refresh timestamp, fall back to the
+      // record timestamp, and only then to today — never default to today,
+      // which would claim every account is current and quietly disable the
+      // staleness fallback in resolve().
+      const refreshed = (a.displayLastUpdatedAt ?? a.updatedAt ?? "").slice(0, 10);
+      const balanceAsOf =
+        /^\d{4}-\d{2}-\d{2}$/.test(refreshed) && refreshed <= today
+          ? refreshed
+          : today;
+
+      const disconnectedAt = a.credential?.disconnectedFromDataProviderAt ?? null;
+      const connectionStatus = a.credential?.updateRequired || disconnectedAt
+        ? "broken"
+        : a.syncDisabled
+          ? "disabled"
+          : a.isManual
+            ? "manual"
+            : "ok";
+
       // recentBalances is a trailing daily array ending today (no dates on
-      // the wire); reconstruct dates by index.
+      // the wire); reconstruct dates by index. Monarch keeps extending it
+      // with the last known value long after a feed dies, so points past the
+      // refresh date are carry-forward, not observations — trimming them
+      // keeps a dead account from writing months of invented daily history.
       const daily = (a.recentBalances ?? [])
         .map((balance, i, arr) => {
           if (balance == null) return null;
@@ -164,7 +210,11 @@ export class MonarchProvider implements SyncProvider {
           d.setUTCDate(d.getUTCDate() - (arr.length - 1 - i));
           return { date: d.toISOString().slice(0, 10), balance };
         })
-        .filter((x): x is { date: string; balance: number } => x !== null);
+        .filter(
+          (x): x is { date: string; balance: number } =>
+            x !== null && x.date <= balanceAsOf,
+        );
+
       return {
         externalId: a.id,
         name: a.displayName,
@@ -172,8 +222,10 @@ export class MonarchProvider implements SyncProvider {
         accountType: mapped.type,
         isAsset: a.isAsset ?? mapped.isAsset,
         balance: a.displayBalance ?? a.currentBalance ?? 0,
-        balanceAsOf: today,
+        balanceAsOf,
         isActive: !a.deactivatedAt,
+        connectionStatus,
+        disconnectedAt: disconnectedAt ? disconnectedAt.slice(0, 10) : null,
         dailyBalances: daily,
         raw: a,
       };

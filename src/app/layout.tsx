@@ -3,7 +3,10 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Nav } from "@/components/nav";
 import { RegisterSW } from "@/components/register-sw";
+import { ScopeBar } from "@/components/scope-bar";
 import { currentSession } from "@/lib/session";
+import { getScope } from "@/lib/scope";
+import { db, persons } from "@/db";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -42,7 +45,11 @@ export default async function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const session = await currentSession();
+  const [session, scope, people] = await Promise.all([
+    currentSession(),
+    getScope(),
+    db.select().from(persons),
+  ]);
   return (
     <html
       lang="en"
@@ -50,6 +57,11 @@ export default async function RootLayout({
     >
       <body className="min-h-full">
         <Nav email={session.email} logoutUrl={session.logoutUrl} />
+        <div className="border-b border-edge bg-surface-2/40">
+          <div className="mx-auto max-w-6xl px-4 py-1.5">
+            <ScopeBar scope={scope} people={people} />
+          </div>
+        </div>
         <main className="mx-auto max-w-6xl px-4 py-6">{children}</main>
         <RegisterSW />
       </body>

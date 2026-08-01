@@ -17,7 +17,10 @@ import fixtureData from "../../../data/fixtures/provider-sample.json";
 // survives being deployed the same way any other imported constant does.
 
 type FixtureFile = {
-  accounts: (Omit<ProviderAccount, "balanceAsOf" | "raw"> & {
+  accounts: (Omit<
+    ProviderAccount,
+    "balanceAsOf" | "raw" | "connectionStatus" | "disconnectedAt"
+  > & {
     dailyBalances: { date: string; balance: number }[];
   })[];
   transactions: ProviderTransaction[];
@@ -41,6 +44,9 @@ export class FixtureProvider implements SyncProvider {
       balanceAsOf:
         a.dailyBalances[a.dailyBalances.length - 1]?.date ??
         new Date().toISOString().slice(0, 10),
+      // A synthetic feed is always healthy — the fixture exists to exercise
+      // the pipeline, not to simulate broken institution connections.
+      connectionStatus: "ok" as const,
       raw: { fixture: true },
     }));
   }

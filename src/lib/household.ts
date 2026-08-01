@@ -5,7 +5,10 @@ import {
   accounts,
   externalAccounts,
   persons,
+  propertyPayments,
+  propertyValuations,
 } from "@/db/schema";
+import type { ConnectionStatus } from "./providers/types";
 
 // ---------------------------------------------------------------------------
 // The household model (docs/HOUSEHOLD.md)
@@ -73,10 +76,20 @@ export const signedValue = (category: string, value: number) =>
 export type Observation = {
   source: SourceId;
   value: number;
+  /** When the underlying value was last *observed at its origin* — not when
+   *  Fred fetched it. A provider that reports "today" for everything makes
+   *  every rule below inert. */
   observedAt: string; // ISO date
   /** Multiple rows from one provider can describe one real account (e.g. an
    *  HSA split into cash + investment sub-accounts); those are summed. */
   parts?: number;
+  /** The source itself says this value can't be trusted as live — its feed to
+   *  the institution is broken or switched off. Such an observation never wins
+   *  on priority, however recent its timestamp claims to be, but still serves
+   *  as a last resort when nothing else knows anything. */
+  untrusted?: boolean;
+  /** Plain-language cause, folded into the resolution reason. */
+  untrustedReason?: string;
 };
 
 export type Resolved = {
@@ -96,6 +109,24 @@ const daysBetween = (a: string, b: string) =>
   );
 
 const CONFLICT_TOLERANCE = 1; // dollars
+
+/** Name each higher-priority source that lost, and why. "Monarch's connection
+ *  to this institution broke 277d ago" is an actionable sentence; the old
+ *  catch-all "had no current data" was not. */
+function describeLosers(
+  skipped: SourceId[],
+  bySource: Map<SourceId, Observation>,
+  asOf: string,
+): string {
+  const parts = skipped.map((s) => {
+    const label = sourceLabel(s);
+    const o = bySource.get(s);
+    if (!o) return `${label} has no data for this account`;
+    if (o.untrusted) return `${label} ${o.untrustedReason ?? "has a broken connection"}`;
+    return `${label} was last updated ${Math.round(daysBetween(asOf, o.observedAt))}d ago`;
+  });
+  return parts.join("; ");
+}
 
 /**
  * Resolve one domain for one account: walk the priority order, take the first
@@ -126,6 +157,9 @@ export function resolve(
   for (let i = 0; i < priority.length; i++) {
     const candidate = bySource.get(priority[i]);
     if (!candidate) continue;
+    // A source that admits its own feed is dead can't win on freshness no
+    // matter what date it stamps on the value.
+    if (candidate.untrusted) continue;
     const limit = STALENESS_DAYS[candidate.source] ?? DEFAULT_STALENESS_DAYS;
     const age = daysBetween(asOf, candidate.observedAt);
     if (age <= limit) {
@@ -133,21 +167,22 @@ export function resolve(
       reason =
         i === 0
           ? `${sourceLabel(candidate.source)} is the highest-priority source for this data and is current (${Math.round(age)}d old).`
-          : `${sourceLabel(candidate.source)} won because ${priority
-              .slice(0, i)
-              .map(sourceLabel)
-              .join(", ")} had no current data for this account.`;
+          : `${sourceLabel(candidate.source)} won because ${describeLosers(priority.slice(0, i), bySource, asOf)}.`;
       break;
     }
   }
 
-  // Everything stale (or unranked): fall back to the freshest observation
-  // rather than reporting nothing.
+  // Everything stale, untrusted, or unranked: fall back to the freshest
+  // observation rather than reporting nothing — but say so plainly, because
+  // "we have a number" and "the number is current" are different claims.
   if (!winner) {
     winner = [...observations].sort((a, b) =>
       a.observedAt < b.observedAt ? 1 : -1,
     )[0];
-    reason = `All sources are stale; showing the most recent (${sourceLabel(winner.source)}, ${winner.observedAt}).`;
+    const age = Math.round(daysBetween(asOf, winner.observedAt));
+    reason = winner.untrusted
+      ? `No source has a live value. Showing ${sourceLabel(winner.source)} from ${winner.observedAt} (${age}d old) — ${winner.untrustedReason ?? "its connection is broken"}.`
+      : `Every source is past its freshness window. Showing the most recent (${sourceLabel(winner.source)}, ${winner.observedAt}, ${age}d old).`;
   }
 
   const alternatives = observations.filter((o) => o.source !== winner!.source);
@@ -182,6 +217,12 @@ export type SourceChip = {
   observedAt: string;
   externalAccountId?: number;
   externalName?: string;
+  /** Provider feed health, so the UI can say "reconnect this in Monarch"
+   *  rather than silently showing a fossilized balance. */
+  connectionStatus?: ConnectionStatus;
+  disconnectedAt?: string | null;
+  /** Age of this observation in days, for the freshness badge. */
+  ageDays?: number;
 };
 
 /** How an account is known across sources — the at-a-glance answer to "what
@@ -198,17 +239,27 @@ export type HouseholdAccount = {
   institution: string | null;
   institutionLabel: string;
   category: string;
+  taxTreatment: string;
   isLiability: boolean;
   ownerPersonId: number | null;
+  isJoint: boolean;
   ownerName: string;
   ownershipShare: number;
-  includeInHousehold: boolean;
+  /** Why this account is held out of net worth, or null when it counts.
+   *  See `accounts.exclusion` in src/db/schema.ts. */
+  exclusion: string | null;
+  tracksMonthlyClose: boolean;
   isActive: boolean;
   hasStatements: boolean;
   connectivity: Connectivity;
   balance: Resolved;
-  /** Balance signed for rollups (liabilities negative). */
+  /** Balance signed for rollups (liabilities negative), and zeroed for a
+   *  closed account — its history stays, but it holds nothing today. */
   signedBalance: number;
+  /** Set when the winning source is stale or its feed is broken. This is the
+   *  "needs attention" signal: the number is still shown, but it is the last
+   *  thing anyone knew rather than the current truth. */
+  staleness: { days: number; connectionStatus: ConnectionStatus | null } | null;
   sources: SourceChip[];
 };
 
@@ -229,6 +280,9 @@ export type HouseholdView = {
   pending: PendingSource[];
   ignored: { id: number; name: string; note: string | null }[];
   people: { id: number; name: string; isPrimary: boolean }[];
+  primaryPersonId: number | null;
+  /** The date every balance in this view was resolved against. */
+  asOf: string;
 };
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -459,19 +513,40 @@ export async function pendingCount(): Promise<number> {
 export async function loadHousehold(asOf?: string): Promise<HouseholdView> {
   const today = asOf ?? new Date().toISOString().slice(0, 10);
 
-  const [hubs, externals, entries, people] = await Promise.all([
-    db.select().from(accounts).orderBy(accounts.sortOrder),
-    db.select().from(externalAccounts),
-    db
-      .select({
-        accountId: accountEntries.accountId,
-        statementDate: accountEntries.statementDate,
-        balance: accountEntries.balance,
-      })
-      .from(accountEntries)
-      .orderBy(desc(accountEntries.statementDate)),
-    db.select().from(persons),
-  ]);
+  const [hubs, externals, entries, people, valuations, loanPoints] =
+    await Promise.all([
+      db.select().from(accounts).orderBy(accounts.sortOrder),
+      db.select().from(externalAccounts),
+      db
+        .select({
+          accountId: accountEntries.accountId,
+          statementDate: accountEntries.statementDate,
+          balance: accountEntries.balance,
+        })
+        .from(accountEntries)
+        .orderBy(desc(accountEntries.statementDate)),
+      db.select().from(persons),
+      // The property ledger is Fred's own evidence about the house, exactly
+      // as account_entries are about every other account.
+      db
+        .select({
+          propertyId: propertyValuations.propertyId,
+          date: propertyValuations.date,
+          marketValue: propertyValuations.marketValue,
+        })
+        .from(propertyValuations)
+        .orderBy(desc(propertyValuations.date)),
+      // ...and about the mortgage: the lender-reported running balance, which
+      // gives the loan a second source to be resolved against the provider's.
+      db
+        .select({
+          propertyId: propertyPayments.propertyId,
+          date: propertyPayments.date,
+          loanBalanceAfter: propertyPayments.loanBalanceAfter,
+        })
+        .from(propertyPayments)
+        .orderBy(desc(propertyPayments.date)),
+    ]);
 
   // Latest statement observation per hub account.
   const latestStatement = new Map<number, { date: string; balance: number }>();
@@ -486,19 +561,35 @@ export async function loadHousehold(asOf?: string): Promise<HouseholdView> {
 
   // Counted evidence only: linked + auto|confirmed. Multiple rows from one
   // provider for the same hub are summed (HSA cash + investments, etc.).
-  const providerObs = new Map<number, Map<string, Observation & { names: string[]; ids: number[] }>>();
+  type ProviderObs = Observation & {
+    names: string[];
+    ids: number[];
+    connectionStatus: ConnectionStatus;
+    disconnectedAt: string | null;
+  };
+  const providerObs = new Map<number, Map<string, ProviderObs>>();
   for (const x of externals) {
     if (!x.linkedAccountId) continue;
     if (x.matchStatus !== "auto" && x.matchStatus !== "confirmed") continue;
-    const perAccount = providerObs.get(x.linkedAccountId) ?? new Map();
+    const perAccount = providerObs.get(x.linkedAccountId) ?? new Map<string, ProviderObs>();
     const existing = perAccount.get(x.provider);
+    // No balanceAsOf means the provider never told us — assume nothing and
+    // treat it as unknown-age rather than silently stamping it "today".
     const observedAt = x.balanceAsOf ?? today;
+    const status = (x.connectionStatus ?? "ok") as ConnectionStatus;
     if (existing) {
       existing.value = Math.round((existing.value + x.currentBalance) * 100) / 100;
       existing.parts = (existing.parts ?? 1) + 1;
       existing.names.push(x.name);
       existing.ids.push(x.id);
-      if (observedAt > existing.observedAt) existing.observedAt = observedAt;
+      // Several rows make one account: the combined figure is only as fresh
+      // and only as trustworthy as its *worst* part, so keep the oldest date
+      // and let any broken part taint the whole.
+      if (observedAt < existing.observedAt) existing.observedAt = observedAt;
+      if (status === "broken" || status === "disabled") {
+        existing.connectionStatus = status;
+        existing.disconnectedAt = x.disconnectedAt ?? existing.disconnectedAt;
+      }
     } else {
       perAccount.set(x.provider, {
         source: x.provider,
@@ -506,6 +597,8 @@ export async function loadHousehold(asOf?: string): Promise<HouseholdView> {
         observedAt,
         names: [x.name],
         ids: [x.id],
+        connectionStatus: status,
+        disconnectedAt: x.disconnectedAt ?? null,
       });
     }
     providerObs.set(x.linkedAccountId, perAccount);
@@ -513,22 +606,61 @@ export async function loadHousehold(asOf?: string): Promise<HouseholdView> {
 
   const personName = new Map(people.map((p) => [p.id, p.name]));
 
+  // Newest ledger figures per property, for accounts backed by one.
+  const latestValuation = new Map<number, { date: string; value: number }>();
+  for (const v of valuations) {
+    if (!latestValuation.has(v.propertyId)) {
+      latestValuation.set(v.propertyId, { date: v.date, value: v.marketValue });
+    }
+  }
+  const latestLoan = new Map<number, { date: string; value: number }>();
+  for (const p of loanPoints) {
+    if (p.loanBalanceAfter == null) continue;
+    if (!latestLoan.has(p.propertyId)) {
+      latestLoan.set(p.propertyId, { date: p.date, value: p.loanBalanceAfter });
+    }
+  }
+
   const householdAccounts: HouseholdAccount[] = hubs.map((h) => {
     const obs: Observation[] = [];
     const chips: SourceChip[] = [];
 
+    // Fred's own evidence: a month-end statement for most accounts, the
+    // property ledger for the ones backed by a property. Both are `fred` —
+    // same source, different record within it.
     const stmt = latestStatement.get(h.id);
-    if (stmt) {
-      obs.push({ source: "fred", value: stmt.balance, observedAt: stmt.date });
+    const ledger =
+      h.propertyId == null
+        ? null
+        : isLiability(h.category)
+          ? latestLoan.get(h.propertyId)
+          : latestValuation.get(h.propertyId);
+    const own = stmt ?? (ledger ? { date: ledger.date, balance: ledger.value } : null);
+    if (own) {
+      obs.push({ source: "fred", value: own.balance, observedAt: own.date });
       chips.push({
         source: "fred",
         status: "own",
-        value: stmt.balance,
-        observedAt: stmt.date,
+        value: own.balance,
+        observedAt: own.date,
+        ageDays: Math.round(daysBetween(today, own.date)),
       });
     }
     for (const [, o] of providerObs.get(h.id) ?? []) {
-      obs.push({ source: o.source, value: o.value, observedAt: o.observedAt, parts: o.parts });
+      const broken = o.connectionStatus === "broken" || o.connectionStatus === "disabled";
+      obs.push({
+        source: o.source,
+        value: o.value,
+        observedAt: o.observedAt,
+        parts: o.parts,
+        untrusted: broken,
+        untrustedReason:
+          o.connectionStatus === "broken"
+            ? `lost its connection to this institution${o.disconnectedAt ? ` on ${o.disconnectedAt}` : ""} and needs reconnecting`
+            : o.connectionStatus === "disabled"
+              ? "has syncing switched off for this account"
+              : undefined,
+      });
       const row = externals.find((e) => e.id === o.ids[0]);
       chips.push({
         source: o.source,
@@ -537,6 +669,9 @@ export async function loadHousehold(asOf?: string): Promise<HouseholdView> {
         observedAt: o.observedAt,
         externalAccountId: o.ids[0],
         externalName: o.names.join(" + "),
+        connectionStatus: o.connectionStatus,
+        disconnectedAt: o.disconnectedAt,
+        ageDays: Math.round(daysBetween(today, o.observedAt)),
       });
     }
 
@@ -545,13 +680,35 @@ export async function loadHousehold(asOf?: string): Promise<HouseholdView> {
 
     const hasProvider = chips.some((c) => c.source !== "fred");
     const connectivity: Connectivity =
-      stmt && hasProvider
+      own && hasProvider
         ? "both"
         : hasProvider
           ? "provider"
-          : stmt
+          : own
             ? "fred"
             : "none";
+
+    // Flag when the winning number is past its own freshness window — the
+    // figure is still the best available, but it is history, not the present.
+    const winner = obs.find((o) => o.source === balance.source);
+    const age = balance.observedAt ? daysBetween(today, balance.observedAt) : 0;
+    const limit = balance.source
+      ? (STALENESS_DAYS[balance.source] ?? DEFAULT_STALENESS_DAYS)
+      : DEFAULT_STALENESS_DAYS;
+    const winnerChip = chips.find((c) => c.source === balance.source);
+    const staleness =
+      balance.value != null && (age > limit || winner?.untrusted)
+        ? {
+            days: Math.round(age),
+            connectionStatus: winnerChip?.connectionStatus ?? null,
+          }
+        : null;
+
+    // A closed account contributes nothing to today's picture, whatever its
+    // last known balance was; its history lives on in account_entries.
+    const signedBalance = h.isActive
+      ? signedValue(h.category, balance.value ?? 0)
+      : 0;
 
     return {
       id: h.id,
@@ -560,18 +717,22 @@ export async function loadHousehold(asOf?: string): Promise<HouseholdView> {
       institution: h.institution,
       institutionLabel: canonicalizeInstitution(h.institution),
       category: h.category,
+      taxTreatment: h.taxTreatment,
       isLiability: isLiability(h.category),
       ownerPersonId: h.ownerPersonId,
+      isJoint: h.isJoint,
       ownerName: h.isJoint
         ? "Joint"
         : (h.ownerPersonId != null ? personName.get(h.ownerPersonId) : null) ?? "Unassigned",
       ownershipShare: h.ownershipShare,
-      includeInHousehold: h.includeInHousehold,
+      exclusion: h.exclusion,
+      tracksMonthlyClose: h.tracksMonthlyClose,
       isActive: h.isActive,
       hasStatements: Boolean(stmt),
       connectivity,
       balance,
-      signedBalance: signedValue(h.category, balance.value ?? 0),
+      signedBalance,
+      staleness,
       sources: chips,
     };
   });
@@ -613,24 +774,135 @@ export async function loadHousehold(asOf?: string): Promise<HouseholdView> {
     pending,
     ignored,
     people: people.map((p) => ({ id: p.id, name: p.name, isPrimary: p.isPrimary })),
+    primaryPersonId: people.find((p) => p.isPrimary)?.id ?? null,
+    asOf: today,
   };
 }
 
-/** Rollup over whatever slice of the roster the user has selected. */
-export function rollup(accts: HouseholdAccount[]) {
+// ---------------------------------------------------------------------------
+// Rollups — the single calculation every screen reads
+//
+// Every net-worth, asset and liability figure in Fred comes from here, over
+// the resolved balances above. That is the whole point: two screens can only
+// disagree if they compute separately, so nothing else is allowed to.
+// ---------------------------------------------------------------------------
+
+/** Whose money to count. `all` is the household (everything at 100%); a person
+ *  id is that person's share; `joint` isolates what's shared. */
+export type ScopeWho = "all" | "joint" | number;
+
+export type Scope = {
+  who: ScopeWho;
+  /** Count the home and its mortgage. Off by default: you always need
+   *  somewhere to live, so that equity isn't spendable wealth. Both sides
+   *  carry the flag, so this never counts a mortgage without its house. */
+  includeHome: boolean;
+};
+
+export const DEFAULT_SCOPE: Scope = { who: "all", includeHome: false };
+
+/**
+ * What fraction of this account belongs to the selected scope.
+ *
+ * Household scope takes everything whole. A person takes their own accounts
+ * whole and their share of anything joint — `ownership_share` is the primary
+ * person's cut, so the other person gets the remainder. The shares of the two
+ * people therefore add back up to the household total exactly, which is the
+ * property that makes the filter trustworthy rather than merely suggestive.
+ */
+export function weightFor(
+  a: Pick<HouseholdAccount, "ownerPersonId" | "isJoint" | "ownershipShare">,
+  scope: Scope,
+  primaryPersonId: number | null,
+): number {
+  if (scope.who === "all") return 1;
+  if (scope.who === "joint") return a.isJoint ? 1 : 0;
+  if (a.isJoint) {
+    return scope.who === primaryPersonId
+      ? a.ownershipShare
+      : 1 - a.ownershipShare;
+  }
+  return a.ownerPersonId === scope.who ? 1 : 0;
+}
+
+/** Whether an account's exclusion flag keeps it out under this scope. */
+export function isExcluded(a: Pick<HouseholdAccount, "exclusion">, scope: Scope): boolean {
+  if (!a.exclusion) return false;
+  if (a.exclusion === "primary_residence" && scope.includeHome) return false;
+  return true;
+}
+
+export type Rollup = {
+  assets: number;
+  liabilities: number;
+  net: number;
+  /** Accounts that actually contributed, for "N of M" labelling. */
+  counted: number;
+  /** Held out by an exclusion flag, grouped by reason — so the UI can say
+   *  what is missing from a total instead of quietly dropping it. */
+  excluded: { reason: string; count: number; net: number }[];
+};
+
+export function rollup(
+  accts: HouseholdAccount[],
+  scope: Scope = DEFAULT_SCOPE,
+  primaryPersonId: number | null = null,
+): Rollup {
   let assets = 0;
   let liabilities = 0;
+  let counted = 0;
+  const excludedBy = new Map<string, { count: number; net: number }>();
+
   for (const a of accts) {
-    if (!a.includeInHousehold) continue;
+    const weight = weightFor(a, scope, primaryPersonId);
+    if (weight === 0) continue;
     if (a.balance.value == null) continue;
-    if (a.isLiability) liabilities += Math.abs(a.balance.value);
-    else assets += a.balance.value;
+
+    // signedBalance already zeroes closed accounts and negates liabilities.
+    const share = a.signedBalance * weight;
+
+    if (isExcluded(a, scope)) {
+      const bucket = excludedBy.get(a.exclusion!) ?? { count: 0, net: 0 };
+      bucket.count++;
+      bucket.net += share;
+      excludedBy.set(a.exclusion!, bucket);
+      continue;
+    }
+
+    counted++;
+    if (share < 0) liabilities += Math.abs(share);
+    else assets += share;
   }
+
   return {
-    assets: Math.round(assets * 100) / 100,
-    liabilities: Math.round(liabilities * 100) / 100,
-    net: Math.round((assets - liabilities) * 100) / 100,
+    assets: round2(assets),
+    liabilities: round2(liabilities),
+    net: round2(assets - liabilities),
+    counted,
+    excluded: [...excludedBy.entries()].map(([reason, v]) => ({
+      reason,
+      count: v.count,
+      net: round2(v.net),
+    })),
   };
+}
+
+const round2 = (v: number) => Math.round(v * 100) / 100;
+
+/** Human label for an exclusion reason, used wherever a total is qualified. */
+export const EXCLUSION_LABELS: Record<string, string> = {
+  primary_residence: "Home equity",
+  unvested: "Unvested",
+  other: "Set aside",
+};
+export const exclusionLabel = (r: string) => EXCLUSION_LABELS[r] ?? r;
+
+/** Accounts whose best number is stale or whose feed is broken — the
+ *  "needs attention" list, distinct from sources that merely disagree. */
+export function needsAttention(accts: HouseholdAccount[]) {
+  return accts
+    .filter((a) => a.staleness && a.isActive && (a.balance.value ?? 0) !== 0)
+    .sort((a, b) => b.staleness!.days - a.staleness!.days);
 }
 
 /** Accounts whose sources disagree beyond tolerance — the generalized form of

@@ -32,7 +32,11 @@ export default async function MonthlyPage({
   const target = monthEnd(y, m);
 
   const [accts, house] = await Promise.all([loadAccounts(), loadHouse()]);
-  const active = accts.filter((a) => a.isActive);
+  // Only accounts the close actually covers. Balance-only accounts (Kate's,
+  // the liabilities) ride on their provider feed and have no statement
+  // coming, so listing them here would be 16 rows of permanent "awaiting
+  // statement" that can never be cleared.
+  const active = accts.filter((a) => a.isActive && a.tracksMonthlyClose);
 
   // Synced-provider balances near the target month-end, for prefill/verify —
   // one query for every account still missing a statement, not one query per

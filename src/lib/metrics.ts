@@ -14,6 +14,14 @@ import {
   appConfig,
 } from "@/db/schema";
 import { monthEnd } from "./format";
+import {
+  DEFAULT_SCOPE,
+  isExcluded,
+  isLiability,
+  signedValue,
+  weightFor,
+  type Scope,
+} from "./household";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -211,8 +219,37 @@ export type PortfolioSeries = {
 export function portfolioSeries(
   accts: AccountWithEntries[],
   houseMonths: HouseMonth[],
+  scope: Scope = DEFAULT_SCOPE,
+  primaryPersonId: number | null = null,
 ): PortfolioSeries {
-  const included = accts.filter((a) => a.includeInNetWorth);
+  // Same membership rules as the live rollup in src/lib/household.ts, applied
+  // to the month-end record instead of today's balances. Anything that
+  // diverged here is precisely what made Overview and Household disagree.
+  const weights = new Map<number, number>();
+  const included = accts.filter((a) => {
+    if (isExcluded(a, scope)) return false;
+    const w = weightFor(a, scope, primaryPersonId);
+    if (w === 0) return false;
+    weights.set(a.id, w);
+    return true;
+  });
+  const weightOf = (id: number) => weights.get(id) ?? 1;
+
+  // The house's month-by-month value comes from the property ledger, not from
+  // statements, so it is driven by its account's flags rather than its
+  // (nonexistent) entries. Before that account exists, fall back to the
+  // scope's own home setting.
+  const houseAccount = accts.find(
+    (a) => a.propertyId != null && !isLiability(a.category),
+  );
+  const houseWeight = houseAccount
+    ? weightFor(houseAccount, scope, primaryPersonId)
+    : scope.who === "all"
+      ? 1
+      : 0.5;
+  const includeHouse = houseAccount
+    ? !isExcluded(houseAccount, scope) && houseWeight > 0
+    : scope.includeHome && houseWeight > 0;
   let min = "9999-12-31";
   let max = "0000-01-01";
   for (const a of included) {
@@ -221,7 +258,7 @@ export function portfolioSeries(
     const last = a.entries[a.entries.length - 1].statementDate;
     max = last > max ? last : max;
   }
-  if (houseMonths.length) {
+  if (includeHouse && houseMonths.length) {
     const hLast = houseMonths[houseMonths.length - 1].date;
     max = hLast > max ? hLast : max;
   }
@@ -251,36 +288,44 @@ export function portfolioSeries(
     let total = 0;
 
     for (const a of included) {
+      const w = weightOf(a.id);
       let i = cursors.get(a.id) ?? 0;
       while (i < a.entries.length && a.entries[i].statementDate <= end) {
         const e = a.entries[i];
-        flow.contributions += individualTotal(e) + e.employerContributions;
-        flow.transfersIn += e.transfersIn;
-        flow.growth += e.growth;
-        flow.withdrawals += e.withdrawals;
-        flow.transfersOut += e.transfersOut;
+        flow.contributions += (individualTotal(e) + e.employerContributions) * w;
+        flow.transfersIn += e.transfersIn * w;
+        flow.growth += e.growth * w;
+        flow.withdrawals += e.withdrawals * w;
+        flow.transfersOut += e.transfersOut * w;
         lastBalance.set(a.id, e.balance);
         i++;
       }
       cursors.set(a.id, i);
-      const bal = lastBalance.get(a.id) ?? 0;
+      // Liabilities are stored as positive magnitudes; without this sign a
+      // credit-card balance would *add* to net worth. Latent until now only
+      // because every liability happened to be filtered out.
+      const bal = signedValue(a.category, lastBalance.get(a.id) ?? 0) * w;
       total += bal;
       catRow[a.category] = ((catRow[a.category] as number) ?? 0) + bal;
     }
 
-    const house = houseByDate.get(end);
+    // The house rides on the property ledger rather than statements, and only
+    // participates when the scope asks for it. Its weight follows the same
+    // rule as any joint account.
+    const house = includeHouse ? houseByDate.get(end) : undefined;
     if (house) {
-      total += house.equityShare;
-      catRow["property"] = ((catRow["property"] as number) ?? 0) + house.equityShare;
-      const dScott = house.cumScott - (prevHouse?.cumScott ?? 0);
-      const dEquity = house.equityShare - (prevHouse?.equityShare ?? 0);
-      flow.transfersIn += dScott;
-      flow.growth += dEquity - dScott;
+      const equity = house.equity * houseWeight;
+      total += equity;
+      catRow["property"] = ((catRow["property"] as number) ?? 0) + equity;
+      const dPaid = (house.cumScott + house.cumKate - (prevHouse ? prevHouse.cumScott + prevHouse.cumKate : 0)) * houseWeight;
+      const dEquity = equity - (prevHouse?.equity ?? 0) * houseWeight;
+      flow.transfersIn += dPaid;
+      flow.growth += dEquity - dPaid;
       prevHouse = house;
-    } else if (prevHouse) {
-      total += prevHouse.equityShare;
-      catRow["property"] =
-        ((catRow["property"] as number) ?? 0) + prevHouse.equityShare;
+    } else if (includeHouse && prevHouse) {
+      const equity = prevHouse.equity * houseWeight;
+      total += equity;
+      catRow["property"] = ((catRow["property"] as number) ?? 0) + equity;
     }
 
     months.push({
@@ -301,10 +346,13 @@ export function portfolioSeries(
 
   const perAccount = included.map((account) => {
     const n = account.entries.length;
+    const w = weightOf(account.id);
+    const at = (i: number) =>
+      round2(signedValue(account.category, account.entries[i].balance) * w);
     return {
       account,
-      current: n ? account.entries[n - 1].balance : 0,
-      prev: n > 1 ? account.entries[n - 2].balance : 0,
+      current: n ? at(n - 1) : 0,
+      prev: n > 1 ? at(n - 2) : 0,
       lastEntry: n ? account.entries[n - 1].statementDate : null,
     };
   });

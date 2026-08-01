@@ -5,6 +5,8 @@ import {
   portfolioSeries,
   annualOverlays,
 } from "@/lib/metrics";
+import { isExcluded, loadHousehold, weightFor } from "@/lib/household";
+import { getScope } from "@/lib/scope";
 import { Card, PageHeader } from "@/components/ui";
 import {
   MonthlyBarChart,
@@ -15,10 +17,29 @@ import {
 export const dynamic = "force-dynamic";
 
 export default async function SavingsPage() {
-  const [accts, house] = await Promise.all([loadAccounts(), loadHouse()]);
+  const scope = await getScope();
+  const [accts, house, hh] = await Promise.all([
+    loadAccounts(),
+    loadHouse(),
+    loadHousehold(),
+  ]);
   const houseMonths = house ? houseMonthly(house) : [];
-  const { months } = portfolioSeries(accts, houseMonths);
+  const { months } = portfolioSeries(accts, houseMonths, scope, hh.primaryPersonId);
   if (months.length === 0) return <p className="text-ink-2">No data yet.</p>;
+
+  // Savings and growth are flow concepts: they exist only where a monthly
+  // close records them. Say how much of the household that actually covers,
+  // rather than implying the accounts without closes simply grew by nothing.
+  const inScope = hh.accounts.filter(
+    (a) => !isExcluded(a, scope) && weightFor(a, scope, hh.primaryPersonId) > 0,
+  );
+  const closeTracked = new Set(
+    accts.filter((a) => a.entries.length > 0).map((a) => a.id),
+  );
+  const covered = inScope.filter((a) => closeTracked.has(a.id));
+  const uncovered = inScope.filter(
+    (a) => !closeTracked.has(a.id) && Math.abs(a.signedBalance) > 0.5,
+  );
 
   // cumulative series: balance, contributions, growth, savings
   const cumulative: {
@@ -57,6 +78,25 @@ export default async function SavingsPage() {
         title="Savings & growth"
         subtitle="Savings = contributions − withdrawals; growth = market change. Transfers between accounts are excluded."
       />
+
+      {uncovered.length > 0 && (
+        <Card>
+          <p className="text-xs text-ink-2">
+            Flow history covers{" "}
+            <span className="text-ink">
+              {covered.length} of {inScope.length}
+            </span>{" "}
+            accounts in view. {uncovered.length} balance-only account
+            {uncovered.length === 1 ? "" : "s"} ({uncovered
+              .slice(0, 3)
+              .map((a) => a.name)
+              .join(", ")}
+            {uncovered.length > 3 ? `, +${uncovered.length - 3} more` : ""}) count
+            toward net worth but record no contributions or growth, so they are
+            absent from every chart below.
+          </p>
+        </Card>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card

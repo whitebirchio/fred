@@ -3,12 +3,8 @@ import { db, externalTransactions, persons } from "@/db";
 import { getProvider } from "@/lib/providers";
 import { monarchCredentialsStatus } from "@/lib/monarch-credentials";
 import { loadSyncState, verificationDiffs } from "@/lib/sync";
-import {
-  loadAccounts,
-  loadHouse,
-  houseMonthly,
-  portfolioSeries,
-} from "@/lib/metrics";
+import { loadHousehold, rollup } from "@/lib/household";
+import { getScope, scopeLabel } from "@/lib/scope";
 import { dateLabel, money } from "@/lib/format";
 import { Card, PageHeader, StatTile } from "@/components/ui";
 import { ExternalAccountRow } from "@/components/external-account-row";
@@ -17,15 +13,15 @@ import { syncNow } from "@/app/actions";
 export const dynamic = "force-dynamic";
 
 export default async function SyncPage() {
-  const [provider, credStatus, { externals, runs, allAccounts }, diffs, people, accts, house, recentTx] =
+  const scope = await getScope();
+  const [provider, credStatus, { externals, runs, allAccounts }, diffs, people, hh, recentTx] =
     await Promise.all([
       getProvider(),
       monarchCredentialsStatus(),
       loadSyncState(),
       verificationDiffs(),
       db.select().from(persons),
-      loadAccounts(),
-      loadHouse(),
+      loadHousehold(),
       db
         .select()
         .from(externalTransactions)
@@ -33,17 +29,11 @@ export default async function SyncPage() {
         .limit(10),
     ]);
 
-  const houseMonths = house ? houseMonthly(house) : [];
-  const { months } = portfolioSeries(accts, houseMonths);
-  const individualNW = months.at(-1)?.balance ?? 0;
-
-  const additions = externals.filter(
-    (e) => !e.linkedAccountId && e.includeInHousehold,
-  );
-  const householdExtra = additions.reduce(
-    (s, e) => s + e.currentBalance * e.ownershipShare,
-    0,
-  );
+  // The same rollup Overview and /household render. The old tile added an
+  // "others" figure derived from the deprecated
+  // external_accounts.include_in_household column, which no longer means
+  // anything — so it was a third, quietly wrong net worth on a third screen.
+  const totals = rollup(hh.accounts, scope, hh.primaryPersonId);
   const lastRun = runs[0];
   // Match status is the authority on what still needs a decision — the same
   // number /household shows. (The old count read the deprecated
@@ -118,9 +108,9 @@ export default async function SyncPage() {
           sub={`${externals.filter((e) => e.linkedAccountId).length} linked · ${unreviewed} to review`}
         />
         <StatTile
-          label="Household net worth"
-          value={money(individualNW + householdExtra)}
-          sub={`you ${money(individualNW)} + others ${money(householdExtra)}`}
+          label={`${scopeLabel(scope, hh.people)} net worth`}
+          value={money(totals.net)}
+          sub={`${totals.counted} accounts · same figure as Overview`}
         />
       </div>
 

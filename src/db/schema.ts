@@ -11,6 +11,7 @@ import {
   text,
   timestamp,
   uniqueIndex,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 
 // ---------------------------------------------------------------------------
@@ -72,9 +73,30 @@ export const accounts = pgTable("accounts", {
   })
     .notNull()
     .default(1),
+  // A closed account contributes $0 to current rollups (its history is kept).
+  // Note this means "the account no longer exists", not "I stopped using it" —
+  // a dormant account still holding money is active.
   isActive: boolean("is_active").notNull().default(true),
-  // Some holdings (e.g. unvested RSUs, ESPP) are tracked but held out of the
-  // net-worth rollup. Seeded from how the original workbook treated them.
+  // Why this account is held out of net worth, or null when it counts. One
+  // column replaces the old include_in_net_worth / include_in_household pair,
+  // which conflated two unrelated ideas — "isn't Scott's" and "deliberately
+  // excluded" — and was the root cause of Overview and Household disagreeing.
+  // Ownership is now expressed by owner_person_id/is_joint/ownership_share
+  // alone; this column expresses only deliberate exclusion, and says why:
+  //   primary_residence — the home and its mortgage. Excluded by default:
+  //     you always need somewhere to live, so the equity isn't spendable.
+  //     Both sides carry this flag, so toggling it on adds a real asset and
+  //     its real debt together and never counts a naked mortgage.
+  //   unvested — granted but not yours yet (RSUs, unvested ESPP).
+  //   other — anything deliberately set aside, reason in `notes`.
+  exclusion: text("exclusion"),
+  // Whether the monthly close asks for a statement here. False for
+  // balance-only accounts that ride entirely on a provider feed (Kate's, the
+  // liabilities): they contribute balances to every rollup but no flows, and
+  // /monthly should not nag for statements that are never coming.
+  tracksMonthlyClose: boolean("tracks_monthly_close").notNull().default(true),
+  // DEPRECATED — superseded by `exclusion` + ownership columns. Retained so
+  // the migration is non-destructive; no longer read by application code.
   includeInNetWorth: boolean("include_in_net_worth").notNull().default(true),
   // Accounts sharing a group are one plan lineage (e.g. the LM→HS→LM 401(k)
   // rollover chain): the tax-lot engine merges their flows chronologically and
@@ -82,16 +104,19 @@ export const accounts = pgTable("accounts", {
   // account as mixed-bucket (tax character varies per contribution rather
   // than per account).
   taxLotGroup: text("tax_lot_group"),
-  // Household lens: whether this account counts toward household rollups.
-  // Distinct from include_in_net_worth, which is the individual (Scott) lens.
-  // Default true — "everything in" — because exclusion is a deliberate act;
-  // unreviewed *sources* are held out separately via
-  // external_accounts.match_status, not via this flag.
+  // DEPRECATED — superseded by `exclusion`. Retained so the migration is
+  // non-destructive; no longer read by application code.
   includeInHousehold: boolean("include_in_household").notNull().default(true),
   // Optional per-domain source priority override, e.g.
   //   { "live_balance": ["fred", "monarch"] }
   // Absent (the norm) = household default order; see src/lib/household.ts.
   resolution: jsonb("resolution"),
+  // Set on the account that represents a property, tying it to the ledger in
+  // `properties` — that ledger, not a statement history, is where this
+  // account's value comes from. Explicit rather than inferred from
+  // category='property' so a second property can never silently inherit the
+  // first one's valuations. (Declared lazily — `properties` is defined below.)
+  propertyId: integer("property_id").references((): AnyPgColumn => properties.id),
   sortOrder: integer("sort_order").notNull().default(0),
   notes: text("notes"),
 });
@@ -307,8 +332,16 @@ export const externalAccounts = pgTable(
     accountType: text("account_type"), // provider-normalized: checking, brokerage, mortgage…
     isAsset: boolean("is_asset").notNull().default(true),
     currentBalance: money("current_balance").notNull().default(0),
+    // When the *balance* was last refreshed at the source, per the provider's
+    // own freshness field — not when Fred synced. Resolution's staleness rules
+    // are only as honest as this column (src/lib/providers/types.ts).
     balanceAsOf: date("balance_as_of"),
     isActive: boolean("is_active").notNull().default(true),
+    // Provider-reported feed health: ok | broken | disabled | manual. A
+    // `broken` feed still returns its last known balance forever, so this is
+    // what stops a dead connection from masquerading as a live source.
+    connectionStatus: text("connection_status").notNull().default("ok"),
+    disconnectedAt: date("disconnected_at"),
     // The spoke→hub pointer: which household account this row is evidence
     // about. Every source record resolves through its hub; it is never itself
     // an account.

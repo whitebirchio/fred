@@ -1,6 +1,13 @@
 import type { AccountWithEntries, Entry } from "./metrics";
 import { individualTotal } from "./metrics";
 import { monthEnd } from "./format";
+import {
+  DEFAULT_SCOPE,
+  isExcluded,
+  weightFor,
+  type HouseholdAccount,
+  type Scope,
+} from "./household";
 
 // ---------------------------------------------------------------------------
 // Tax-lot engine
@@ -133,8 +140,21 @@ type Unit = {
   bucket: TaxBucket | null; // for single-bucket units
 };
 
-function buildUnits(accts: AccountWithEntries[]): Unit[] {
-  const included = accts.filter((a) => a.includeInNetWorth);
+function buildUnits(
+  accts: AccountWithEntries[],
+  scope: Scope,
+  primaryPersonId: number | null,
+): Unit[] {
+  // Tax character is derived from *flows* — contributions split by character,
+  // growth allocated across them. An account with no close history has no
+  // flows, so it cannot form lots here; those balances are classified by
+  // account type instead (see bucketBalanceOnly).
+  const included = accts.filter(
+    (a) =>
+      a.entries.length > 0 &&
+      !isExcluded(a, scope) &&
+      weightFor(a, scope, primaryPersonId) > 0,
+  );
   const groups = new Map<string, AccountWithEntries[]>();
   const singles: AccountWithEntries[] = [];
   for (const a of included) {
@@ -168,8 +188,12 @@ function buildUnits(accts: AccountWithEntries[]): Unit[] {
   return units;
 }
 
-export function taxLotSeries(accts: AccountWithEntries[]): TaxLotResult {
-  const units = buildUnits(accts);
+export function taxLotSeries(
+  accts: AccountWithEntries[],
+  scope: Scope = DEFAULT_SCOPE,
+  primaryPersonId: number | null = null,
+): TaxLotResult {
+  const units = buildUnits(accts, scope, primaryPersonId);
   const grid = monthGrid(units.flatMap((u) => u.members));
   const series: BucketPoint[] = [];
   const drift = new Map<string, number>();
@@ -291,6 +315,99 @@ export function taxLotSeries(accts: AccountWithEntries[]): TaxLotResult {
     drift: [...drift.entries()]
       .map(([name, amount]) => ({ name, amount }))
       .filter((d) => Math.abs(d.amount) > 1),
+  };
+}
+
+/**
+ * Tax bucket for an account Fred has no flow history for.
+ *
+ * The lot engine above derives character from contributions; with none to
+ * read, the only honest classifier left is what kind of account it is. That
+ * is weaker — it can't distinguish a 401(k)'s Roth sub-balance from its
+ * pre-tax one — so these balances are reported separately from simulated
+ * lots rather than blended in silently.
+ */
+export function bucketForAccount(a: {
+  taxTreatment?: string | null;
+  category: string;
+  name?: string;
+}): TaxBucket | null {
+  switch (a.taxTreatment) {
+    case "taxable":
+      return "taxable";
+    case "traditional":
+    case "pension":
+      return "pretax";
+    case "roth":
+      return "roth";
+    case "hsa":
+      return "hsa";
+  }
+
+  // `na` is the default for accounts added from a provider feed, where nobody
+  // has declared a treatment. Category alone would call every retirement
+  // account pre-tax — turning a Roth IRA into a taxable-at-withdrawal balance,
+  // which is the single most consequential thing to get wrong here. The name
+  // is the only remaining evidence, and Roth accounts are near-universally
+  // labelled as such. Order matters: "Roth IRA" must not fall into the IRA
+  // rule below it.
+  const n = (a.name ?? "").toLowerCase();
+  if (/\broth\b/.test(n)) return "roth";
+  if (/\bhsa\b|health savings/.test(n)) return "hsa";
+  if (/pension|traditional|\btrad\b|\bsep\b|401\s*\(?k\)?|\bira\b|403\s*\(?b\)?/.test(n))
+    return "pretax";
+
+  switch (a.category) {
+    case "cash":
+    case "brokerage":
+    case "crypto":
+      return "taxable";
+    case "retirement":
+      return "pretax";
+    case "hsa":
+      return "hsa";
+    default:
+      return null; // property and liabilities aren't investable dollars
+  }
+}
+
+export type BalanceOnlyBuckets = {
+  buckets: BucketBalances;
+  total: number;
+  accounts: { name: string; bucket: TaxBucket; value: number }[];
+};
+
+/**
+ * Classify in-scope accounts that carry a balance but no close history —
+ * Kate's accounts and anything else riding purely on a provider feed — so
+ * they reach the allocation without being invented into the flow series.
+ */
+export function bucketBalanceOnly(
+  accts: HouseholdAccount[],
+  scope: Scope,
+  primaryPersonId: number | null,
+  hasCloseHistory: (accountId: number) => boolean,
+): BalanceOnlyBuckets {
+  const buckets = zeroBuckets();
+  const out: BalanceOnlyBuckets["accounts"] = [];
+  for (const a of accts) {
+    if (hasCloseHistory(a.id)) continue;
+    if (isExcluded(a, scope)) continue;
+    if (!a.isActive) continue;
+    const w = weightFor(a, scope, primaryPersonId);
+    if (w === 0) continue;
+    const bucket = bucketForAccount(a);
+    if (!bucket) continue;
+    const value = round2(a.signedBalance * w);
+    if (value <= 0) continue; // liabilities aren't investable dollars either
+    buckets[bucket] += value;
+    out.push({ name: a.name, bucket, value });
+  }
+  for (const b of TAX_BUCKETS) buckets[b] = round2(buckets[b]);
+  return {
+    buckets,
+    total: round2(TAX_BUCKETS.reduce((s, b) => s + buckets[b], 0)),
+    accounts: out.sort((x, y) => y.value - x.value),
   };
 }
 

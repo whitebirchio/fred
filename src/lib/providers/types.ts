@@ -2,6 +2,21 @@
 // tomorrow) translates its payloads into these shapes at the boundary; nothing
 // outside src/lib/providers/ may depend on a provider's native format.
 
+/** How much the provider's own plumbing can be trusted right now.
+ *
+ *  A balance is only as good as the connection that fetched it, and providers
+ *  keep serving the last value they saw long after that connection breaks —
+ *  silently, with no error anywhere in the sync. Carrying this alongside the
+ *  balance is what lets resolution demote a source that has quietly stopped
+ *  being a live feed:
+ *    ok       — connected and syncing
+ *    broken   — the provider says re-authentication is needed, or it lost its
+ *               link to the institution; the balance is a fossil
+ *    disabled — syncing deliberately turned off at the provider
+ *    manual   — never was a live feed; a human types this value in at the
+ *               provider, so staleness is expected rather than a fault */
+export type ConnectionStatus = "ok" | "broken" | "disabled" | "manual";
+
 export type ProviderAccount = {
   externalId: string;
   name: string;
@@ -11,8 +26,16 @@ export type ProviderAccount = {
   accountType: string;
   isAsset: boolean;
   balance: number;
-  balanceAsOf: string; // ISO date
+  /** ISO date the *balance* was last refreshed at the source — NOT the time
+   *  of the sync. Providers happily hand back months-old values, so this must
+   *  come from the provider's own freshness field; defaulting it to "today"
+   *  fabricates currency and silently disables every staleness rule
+   *  downstream (see src/lib/household.ts). */
+  balanceAsOf: string;
   isActive: boolean;
+  connectionStatus: ConnectionStatus;
+  /** When a broken connection last worked, if the provider says. */
+  disconnectedAt?: string | null;
   /** Recent daily balances when the provider exposes them. */
   dailyBalances?: { date: string; balance: number }[];
   /** Original payload — stored as an escape hatch, never read by app logic. */

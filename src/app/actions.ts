@@ -2,7 +2,9 @@
 
 import { and, desc, eq, lt } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { cookies } from "next/headers";
 import { db } from "@/db";
+import { SCOPE_COOKIE } from "@/lib/scope";
 import {
   accountEntries,
   accounts,
@@ -18,6 +20,30 @@ const num = (v: FormDataEntryValue | null) => {
   const n = parseFloat(String(v ?? "").replace(/[$,]/g, ""));
   return Number.isFinite(n) ? Math.round(n * 100) / 100 : 0;
 };
+
+/**
+ * Persist the viewing scope (whose money, and whether the home counts).
+ *
+ * Stored in a cookie rather than the database because it is a property of
+ * how you're *looking* right now, not of the household — and read
+ * server-side so every route renders the same slice without each page
+ * having to remember to ask.
+ */
+export async function setScope(formData: FormData) {
+  const who = String(formData.get("who") ?? "all");
+  const includeHome = formData.get("includeHome") === "1";
+  const valid = who === "all" || who === "joint" || /^\d+$/.test(who);
+  const store = await cookies();
+  store.set(SCOPE_COOKIE, `${valid ? who : "all"}:${includeHome ? 1 : 0}`, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: true,
+    maxAge: 60 * 60 * 24 * 365,
+    path: "/",
+  });
+  // Every page's totals depend on this, so refresh the whole tree.
+  revalidatePath("/", "layout");
+}
 
 /**
  * Add or update a monthly statement entry. Growth is derived as the plug that
@@ -372,12 +398,22 @@ export async function updateHouseholdAccount(formData: FormData) {
   const id = Number(formData.get("accountId"));
   if (!id) throw new Error("Missing account id");
   const ownerRaw = String(formData.get("ownerPersonId") ?? "");
+  const isJoint = ownerRaw === "joint";
+  const exclusionRaw = String(formData.get("exclusion") ?? "");
+  const exclusion = ["primary_residence", "unvested", "other"].includes(exclusionRaw)
+    ? exclusionRaw
+    : null;
   await db
     .update(accountsTable)
     .set({
-      includeInHousehold: formData.get("includeInHousehold") === "on",
-      ownerPersonId: ownerRaw && ownerRaw !== "joint" ? Number(ownerRaw) : null,
-      isJoint: ownerRaw === "joint",
+      exclusion,
+      tracksMonthlyClose: formData.get("tracksMonthlyClose") === "on",
+      ownerPersonId: isJoint || !ownerRaw ? null : Number(ownerRaw),
+      isJoint,
+      // Joint means shared, so the default split is even — matching how the
+      // house has always been treated. Individually-owned accounts belong
+      // wholly to their owner.
+      ownershipShare: isJoint ? 0.5 : 1,
     })
     .where(eq(accountsTable.id, id));
   revalidatePath("/household");

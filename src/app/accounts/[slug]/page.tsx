@@ -1,8 +1,14 @@
 import { notFound } from "next/navigation";
 import { individualTotal, loadAccounts } from "@/lib/metrics";
 import { contributionFieldFor } from "@/lib/taxlots";
+import {
+  loadHousehold,
+  signedValue,
+  sourceIcon,
+  sourceLabel,
+} from "@/lib/household";
 import { CATEGORY_META } from "@/lib/categories";
-import { money, monthEnd, monthLabel } from "@/lib/format";
+import { dateLabel, money, monthEnd, monthLabel } from "@/lib/format";
 import { Card, PageHeader, StatTile } from "@/components/ui";
 import { MonthlyBarChart, TimeSeriesChart } from "@/components/charts";
 import { EntryForm } from "@/components/entry-form";
@@ -17,13 +23,15 @@ export default async function AccountPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const accts = await loadAccounts();
+  const [accts, hh] = await Promise.all([loadAccounts(), loadHousehold()]);
   const account = accts.find((a) => a.slug === slug);
   if (!account) notFound();
+  // The same resolved balance every other screen shows for this account,
+  // with the provenance that explains which source won.
+  const live = hh.accounts.find((a) => a.id === account.id) ?? null;
 
   const entries = account.entries;
   const last = entries.at(-1);
-  const prev = entries.at(-2);
   const totals = entries.reduce(
     (t, e) => ({
       contributions: t.contributions + individualTotal(e) + e.employerContributions,
@@ -70,13 +78,21 @@ export default async function AccountPage({
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <StatTile
           label="Balance"
-          value={last ? money(last.balance) : "–"}
-          sub={last ? `as of ${monthLabel(last.statementDate)}` : undefined}
+          value={live?.balance.value != null ? money(live.signedBalance) : "–"}
+          sub={
+            live?.balance.observedAt
+              ? `${sourceLabel(live.balance.source!)} · ${dateLabel(live.balance.observedAt)}`
+              : undefined
+          }
         />
         <StatTile
-          label="Last month change"
-          value={last && prev ? money(last.balance - prev.balance) : "–"}
-          deltaGood={last && prev ? last.balance >= prev.balance : undefined}
+          label="Since last close"
+          value={
+            live?.balance.value != null && last
+              ? money(live.signedBalance - signedValue(account.category, last.balance))
+              : "–"
+          }
+          sub={last ? monthLabel(last.statementDate) : undefined}
         />
         <StatTile label="Lifetime contributions" value={money(totals.contributions)} />
         <StatTile
@@ -85,6 +101,46 @@ export default async function AccountPage({
           deltaGood={totals.growth >= 0}
         />
       </div>
+
+      {/* Which source this number came from, and why — the same explanation
+          /household gives, so the two can't tell different stories. */}
+      {live && live.sources.length > 0 && (
+        <Card title="Where this balance comes from">
+          <ul className="space-y-1.5 text-sm">
+            {live.sources.map((c) => {
+              const winner = c.source === live.balance.source;
+              return (
+                <li
+                  key={`${c.source}-${c.externalAccountId ?? "own"}`}
+                  className="flex flex-wrap items-baseline justify-between gap-2"
+                >
+                  <span className="text-ink-2">
+                    {sourceIcon(c.source)} {sourceLabel(c.source)}
+                    {c.externalName && (
+                      <span className="text-ink-3"> ({c.externalName})</span>
+                    )}
+                    <span className="ml-2 text-xs text-ink-3">
+                      as of {c.observedAt}
+                      {c.connectionStatus === "broken" && (
+                        <span className="ml-1 text-bad">· connection broken</span>
+                      )}
+                    </span>
+                  </span>
+                  <span className="tabular-nums text-ink">
+                    {money(c.value)}
+                    {winner && (
+                      <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 text-xs text-accent">
+                        shown
+                      </span>
+                    )}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+          <p className="mt-2 text-xs text-ink-3">{live.balance.reason}</p>
+        </Card>
+      )}
 
       <Card title="Balance">
         <TimeSeriesChart

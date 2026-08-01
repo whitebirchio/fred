@@ -62,7 +62,7 @@ export function EntryForm({
     { key: "transfersOut", label: LABELS.transfersOut },
   ];
 
-  const [values, setValues] = useState<Record<string, string>>(() =>
+  const initialValues = () =>
     Object.fromEntries(
       fields.map((f) => [
         f.key,
@@ -70,11 +70,36 @@ export function EntryForm({
           ? (defaults?.balance?.toString() ?? "")
           : (defaults?.[f.key]?.toString() ?? "0"),
       ]),
-    ),
-  );
+    );
+
+  const [values, setValues] = useState<Record<string, string>>(initialValues);
   const [date, setDate] = useState(statementDate);
   const [pending, startTransition] = useTransition();
   const [saved, setSaved] = useState(false);
+
+  // Re-point the form when it is asked to describe a different account/month.
+  //
+  // useState reads its initial value only on mount, and moving between months
+  // on /monthly is a client-side navigation that re-renders the *same*
+  // component in the same tree position. Without this the form silently keeps
+  // the month it was first mounted with: you navigate June -> July, the header
+  // reads July, the hidden statementDate still reads 2026-06-30, and pressing
+  // Save writes to the month you just left — which looks exactly like two
+  // months being bound together. Call sites also pass a `key`, which makes
+  // this a remount in practice; the guard stays so a future call site that
+  // forgets the key degrades into "correct" rather than "quietly wrong".
+  const identity = `${accountId}|${statementDate}`;
+  const [lastIdentity, setLastIdentity] = useState(identity);
+  if (identity !== lastIdentity) {
+    setLastIdentity(identity);
+    setValues(initialValues());
+    setDate(statementDate);
+    setSaved(false);
+  }
+
+  // The date is editable on purpose (back-filling an odd statement date), so
+  // it can legitimately differ from the month in view — but never silently.
+  const retargeted = date !== statementDate;
 
   const n = (k: string) => {
     const v = parseFloat((values[k] ?? "0").replace(/[$,]/g, ""));
@@ -138,6 +163,12 @@ export function EntryForm({
           </label>
         ))}
       </div>
+      {retargeted && (
+        <p className="rounded-lg border border-bad/40 px-3 py-2 text-xs text-bad">
+          Heads up: this will save to <strong>{date}</strong>, not {statementDate}{" "}
+          — the month you&apos;re viewing.
+        </p>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-surface-2 px-3 py-2 text-sm">
         <span className="text-ink-2">
           Derived growth for {accountName}:{" "}

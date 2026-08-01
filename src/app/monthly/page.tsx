@@ -141,7 +141,11 @@ export default async function MonthlyPage({
               )}
             </summary>
             <div className="mt-3 border-t border-edge pt-3">
+              {/* key on the month as well as the account: without it React
+                  reuses this form's state across a month change and the next
+                  save lands on the month you navigated away from. */}
               <EntryForm
+                key={`${account.id}-${target}`}
                 accountId={account.id}
                 accountName={account.name}
                 statementDate={target}

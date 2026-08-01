@@ -166,6 +166,7 @@ export default async function AccountPage({
         subtitle="Enter the statement balance and any flows — growth is derived automatically"
       >
         <EntryForm
+          key={`${account.id}-${nextDate}`}
           accountId={account.id}
           accountName={account.name}
           statementDate={nextDate}

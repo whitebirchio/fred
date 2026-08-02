@@ -406,6 +406,86 @@ shares summing to the whole, the home pair moving together, liabilities
 signed, closed accounts at zero, and every investable dollar landing in a tax
 bucket. Run it after any change to resolution or rollup.
 
+## Phase 4 — the charts join the model (shipped 2026-08-02)
+
+Phase 3 made every *headline* agree. It left the visualizations behind: they
+were built from `account_entries`, so an account with no monthly close — Kate's,
+the joint ones — simply did not exist in them. Net worth said $2.65M while the
+chart beneath it ended around $2.2M, and the honest-but-unsatisfying fix at the
+time was a caption explaining the gap.
+
+The root cause was narrower than it looked. `resolve()` already answers "what
+is this account worth now" by choosing between sources. `portfolioSeries` never
+asked it — it read one table directly. **One number went through resolution and
+the other didn't.** That was the whole disconnect.
+
+### Month-end resolution
+
+`src/lib/series.ts` runs the same idea per account per month. The priority is
+deliberately the reverse of the live one:
+
+| Domain | Priority | Why |
+|---|---|---|
+| `live_balance` | monarch → fred | freshness wins; a close is month-end |
+| month-end | fred → monarch | the close wins for a month it covers, because it carries the flow breakdown a provider balance cannot |
+
+Where a month resolves to a close, its real contributions/growth/withdrawals
+are used. Where it resolves to a provider, all that is known is that the
+balance moved — reported as **`unknown`** rather than guessed into savings or
+growth. Closing a month later replaces its `unknown` with the real breakdown.
+
+### What made it possible
+
+Monarch's `snapshotsForAccount(accountId)` returns **daily** per-account
+balances — verified against the live API: 578 points with no gaps, back to
+2025-01-01, for all 28 linked accounts. That start is when these accounts were
+first connected (33 of 36 have `createdAt` in Jan 2025), not a retention
+window, so the history is stable rather than rolling.
+
+It costs one request per account, which is far more subrequests than a Workers
+invocation may make, so it is a **CLI backfill**
+(`scripts/backfill_history.ts`) rather than part of a sync. Routine syncs keep
+the recent end current from the short trailing window already in
+`fetchAccounts`. Once backfilled the points are Fred's, regardless of what the
+provider later retains — a reason to run it sooner rather than later.
+
+### The invariant that replaced the caption
+
+The series now extends through the current, partial month using the live
+resolved balances, which makes **the last point of the chart the same number as
+the headline** — not close to it, the same. `verify_consistency` asserts it in
+every scope (household, per-person, joint, and with home equity toggled on).
+
+That assertion immediately earned its keep. It caught three real defects that
+the previous "these legitimately differ" check could never have seen:
+
+1. **Liability signs inverted in history.** Monarch reports `signedBalance`
+   negative for debts; Fred stores magnitudes and signs at rollup. Storing the
+   provider's sign verbatim flipped every credit card into an asset once
+   `signedValue()` negated it a second time.
+2. **The house counted twice with home equity on.** The ledger contributed
+   *equity* (market − loan) while the mortgage account separately contributed
+   the loan. Now that the mortgage is its own account (Phase 3), the ledger
+   must contribute market value only.
+3. **The current month re-derived instead of resolved.** Reading raw snapshots
+   for today ignored source priority and broken-feed distrust, so the chart
+   disagreed with the headline by ~$10k — including showing Monarch's stale
+   pension figure that resolution had correctly rejected.
+
+### Coverage
+
+Months before every provider-dependent account starts reporting are real but
+partial — they cover the accounts Fred knew about then. The series flags this
+per month (`fullCoverage`) and Overview explains the resulting step rather than
+letting it read as growth. Coverage on this household is complete from
+**Feb 2025**.
+
+The boundary is deliberately defined over accounts that *depend on a provider
+for history*, not over all accounts. Defining it as "every account has data"
+let the newest account set it — an account opened in 2026 legitimately has no
+2025 history, and would have put the boundary in the recent past while saying
+nothing useful about the household picture.
+
 ## Open questions
 
 - Does the primary-residence-vs-investment-property distinction want an

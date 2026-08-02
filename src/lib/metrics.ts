@@ -14,6 +14,7 @@ import {
   appConfig,
 } from "@/db/schema";
 import { monthEnd } from "./format";
+import type { AccountHistory, MonthPointForAccount } from "./series";
 import {
   DEFAULT_SCOPE,
   isExcluded,
@@ -33,12 +34,27 @@ export type Flow = {
   growth: number;
   withdrawals: number;
   transfersOut: number;
+  /** Balance movement we can see but cannot explain: months whose figure came
+   *  from a provider, which reports what an account is worth but never why it
+   *  changed. Reported as its own quantity rather than being guessed into
+   *  contributions or growth — the honest answer to a real gap in the data. */
+  unknown: number;
 };
 
 export type MonthPoint = Flow & {
   date: string; // month-end ISO
   balance: number;
   savings: number; // contributions - withdrawals
+  /** True once every account that depends on a provider for its history is
+   *  represented. Those are the accounts that were invisible in the charts
+   *  before month-end resolution existed, so this marks where the household
+   *  picture becomes complete rather than merely partial.
+   *
+   *  Deliberately not "every account has data": an account opened last year
+   *  legitimately has no history before it existed, and letting the newest
+   *  account define the boundary would put it in the recent past and say
+   *  nothing useful. */
+  fullCoverage: boolean;
 };
 
 export type AccountWithEntries = typeof accounts.$inferSelect & {
@@ -211,16 +227,23 @@ export type PortfolioSeries = {
 };
 
 /**
- * Monthly totals with per-account carry-forward (the sheets' VLOOKUP(...,TRUE)
- * behavior: an account with no entry for a month keeps its last known balance).
- * The house participates as even-split equity: Δ(paid by Scott) counts as a
- * transfer in, the rest of the equity change as growth.
+ * Monthly totals, built from resolved month-end balances.
+ *
+ * Every account contributes, whether or not Fred holds a monthly close for it:
+ * a close supplies the balance *and* its flow breakdown, a provider snapshot
+ * supplies the balance alone and its movement is reported as `unknown`. That
+ * is what stops the charts from disagreeing with the headline — they are now
+ * the same resolution, evaluated at each month instead of only today.
+ *
+ * The house participates as even-split equity from the property ledger:
+ * Δ(payments) counts as a transfer in, the rest of the equity change as growth.
  */
 export function portfolioSeries(
   accts: AccountWithEntries[],
   houseMonths: HouseMonth[],
   scope: Scope = DEFAULT_SCOPE,
   primaryPersonId: number | null = null,
+  histories: Map<number, AccountHistory> = new Map(),
 ): PortfolioSeries {
   // Same membership rules as the live rollup in src/lib/household.ts, applied
   // to the month-end record instead of today's balances. Anything that
@@ -250,13 +273,20 @@ export function portfolioSeries(
   const includeHouse = houseAccount
     ? !isExcluded(houseAccount, scope) && houseWeight > 0
     : scope.includeHome && houseWeight > 0;
+  // Span every month any in-scope account has evidence for. Falling back to
+  // statement dates keeps this working when no histories are supplied (the
+  // fixture pipeline, and any caller that only wants close data).
   let min = "9999-12-31";
   let max = "0000-01-01";
   for (const a of included) {
-    if (a.entries.length === 0) continue;
-    min = a.entries[0].statementDate < min ? a.entries[0].statementDate : min;
-    const last = a.entries[a.entries.length - 1].statementDate;
-    max = last > max ? last : max;
+    const pts = histories.get(a.id)?.points;
+    const first = pts?.length ? pts[0].date : a.entries[0]?.statementDate;
+    const last = pts?.length
+      ? pts[pts.length - 1].date
+      : a.entries[a.entries.length - 1]?.statementDate;
+    if (!first || !last) continue;
+    if (first < min) min = first;
+    if (last > max) max = last;
   }
   if (includeHouse && houseMonths.length) {
     const hLast = houseMonths[houseMonths.length - 1].date;
@@ -272,6 +302,24 @@ export function portfolioSeries(
   const houseByDate = new Map(houseMonths.map((h) => [h.date, h]));
   let prevHouse: HouseMonth | null = null;
 
+  // Per-account month lookup, and the month each one first has any evidence —
+  // an account appearing for the first time is an opening position, not an
+  // inflow, or every account would read as a giant deposit in its first month.
+  const pointByMonth = new Map<number, Map<string, MonthPointForAccount>>();
+  for (const [id, h] of histories) {
+    pointByMonth.set(id, new Map(h.points.map((p) => [p.date, p])));
+  }
+
+  // Accounts with no monthly close of their own rely entirely on a provider
+  // for history — Kate's and the joint accounts. The month the last of them
+  // starts reporting is the month this chart stops understating the household.
+  const providerOnly = included.filter((a) => a.entries.length === 0);
+  const coverageMonth = providerOnly.reduce<string | null>((latest, a) => {
+    const first = histories.get(a.id)?.points[0]?.date ?? null;
+    if (!first) return latest;
+    return !latest || first > latest ? first : latest;
+  }, null);
+
   const months: MonthPoint[] = [];
   const byCategory: PortfolioSeries["byCategory"] = [];
 
@@ -283,27 +331,48 @@ export function portfolioSeries(
       growth: 0,
       withdrawals: 0,
       transfersOut: 0,
+      unknown: 0,
     };
     const catRow: { [k: string]: number | string } = { date: end };
     let total = 0;
 
     for (const a of included) {
       const w = weightOf(a.id);
-      let i = cursors.get(a.id) ?? 0;
-      while (i < a.entries.length && a.entries[i].statementDate <= end) {
-        const e = a.entries[i];
-        flow.contributions += (individualTotal(e) + e.employerContributions) * w;
-        flow.transfersIn += e.transfersIn * w;
-        flow.growth += e.growth * w;
-        flow.withdrawals += e.withdrawals * w;
-        flow.transfersOut += e.transfersOut * w;
-        lastBalance.set(a.id, e.balance);
-        i++;
+      const point = pointByMonth.get(a.id)?.get(end);
+
+      if (point) {
+        const prevBalance = lastBalance.get(a.id);
+        if (point.origin === "close" && point.entry) {
+          const e = point.entry;
+          flow.contributions += (individualTotal(e) + e.employerContributions) * w;
+          flow.transfersIn += e.transfersIn * w;
+          flow.growth += e.growth * w;
+          flow.withdrawals += e.withdrawals * w;
+          flow.transfersOut += e.transfersOut * w;
+        } else if (prevBalance !== undefined) {
+          // A provider tells us the balance, never why it moved.
+          flow.unknown += signedValue(a.category, point.balance - prevBalance) * w;
+        }
+        lastBalance.set(a.id, point.balance);
+      } else {
+        // No history supplied for this account: fall back to walking its
+        // entries, so callers that pass no histories still get the old series.
+        let i = cursors.get(a.id) ?? 0;
+        while (i < a.entries.length && a.entries[i].statementDate <= end) {
+          const e = a.entries[i];
+          flow.contributions += (individualTotal(e) + e.employerContributions) * w;
+          flow.transfersIn += e.transfersIn * w;
+          flow.growth += e.growth * w;
+          flow.withdrawals += e.withdrawals * w;
+          flow.transfersOut += e.transfersOut * w;
+          lastBalance.set(a.id, e.balance);
+          i++;
+        }
+        cursors.set(a.id, i);
       }
-      cursors.set(a.id, i);
+
       // Liabilities are stored as positive magnitudes; without this sign a
-      // credit-card balance would *add* to net worth. Latent until now only
-      // because every liability happened to be filtered out.
+      // credit-card balance would *add* to net worth.
       const bal = signedValue(a.category, lastBalance.get(a.id) ?? 0) * w;
       total += bal;
       catRow[a.category] = ((catRow[a.category] as number) ?? 0) + bal;
@@ -312,20 +381,31 @@ export function portfolioSeries(
     // The house rides on the property ledger rather than statements, and only
     // participates when the scope asks for it. Its weight follows the same
     // rule as any joint account.
+    // Once the mortgage is its own account, the ledger must contribute the
+    // *market value* only — contributing equity would net the loan a second
+    // time, on top of the mortgage account already carrying it. Only the
+    // legacy path (no house account yet) still uses equity.
+    const houseValueOf = (h: HouseMonth) =>
+      (houseAccount ? h.marketValue : h.equity) * houseWeight;
+
     const house = includeHouse ? houseByDate.get(end) : undefined;
     if (house) {
-      const equity = house.equity * houseWeight;
-      total += equity;
-      catRow["property"] = ((catRow["property"] as number) ?? 0) + equity;
-      const dPaid = (house.cumScott + house.cumKate - (prevHouse ? prevHouse.cumScott + prevHouse.cumKate : 0)) * houseWeight;
-      const dEquity = equity - (prevHouse?.equity ?? 0) * houseWeight;
+      const value = houseValueOf(house);
+      total += value;
+      catRow["property"] = ((catRow["property"] as number) ?? 0) + value;
+      const dPaid =
+        (house.cumScott +
+          house.cumKate -
+          (prevHouse ? prevHouse.cumScott + prevHouse.cumKate : 0)) *
+        houseWeight;
+      const dValue = value - (prevHouse ? houseValueOf(prevHouse) : 0);
       flow.transfersIn += dPaid;
-      flow.growth += dEquity - dPaid;
+      flow.growth += dValue - dPaid;
       prevHouse = house;
     } else if (includeHouse && prevHouse) {
-      const equity = prevHouse.equity * houseWeight;
-      total += equity;
-      catRow["property"] = ((catRow["property"] as number) ?? 0) + equity;
+      const value = houseValueOf(prevHouse);
+      total += value;
+      catRow["property"] = ((catRow["property"] as number) ?? 0) + value;
     }
 
     months.push({
@@ -336,7 +416,9 @@ export function portfolioSeries(
       growth: round2(flow.growth),
       withdrawals: round2(flow.withdrawals),
       transfersOut: round2(flow.transfersOut),
+      unknown: round2(flow.unknown),
       savings: round2(flow.contributions - flow.withdrawals),
+      fullCoverage: coverageMonth === null || end >= coverageMonth,
     });
     for (const k of Object.keys(catRow)) {
       if (k !== "date") catRow[k] = round2(catRow[k] as number);

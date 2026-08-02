@@ -14,6 +14,7 @@ import {
   BUCKET_META,
 } from "@/lib/taxlots";
 import { loadHousehold } from "@/lib/household";
+import { loadAccountHistories } from "@/lib/series";
 import { getScope } from "@/lib/scope";
 import {
   defaultAssumptions,
@@ -36,7 +37,22 @@ export default async function PlanPage() {
     db.select().from(appConfig).where(eq(appConfig.key, "plan")),
   ]);
   const houseMonths = house ? houseMonthly(house) : [];
-  const { months } = portfolioSeries(accts, houseMonths, scope, hh.primaryPersonId);
+  const histories = await loadAccountHistories(
+    accts.map((a) => a.id),
+    hh.asOf,
+    new Map(
+      hh.accounts
+        .filter((a) => a.balance.value != null)
+        .map((a) => [a.id, a.isActive ? a.balance.value! : 0]),
+    ),
+  );
+  const { months } = portfolioSeries(
+    accts,
+    houseMonths,
+    scope,
+    hh.primaryPersonId,
+    histories,
+  );
   const lots = taxLotSeries(accts, scope, hh.primaryPersonId);
 
   // Accounts with no close history can't be simulated into tax lots, but their

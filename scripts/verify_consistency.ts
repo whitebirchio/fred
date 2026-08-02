@@ -16,7 +16,9 @@ import {
   needsAttention,
   rollup,
   weightFor,
+  type Scope,
 } from "../src/lib/household";
+import { loadAccountHistories } from "../src/lib/series";
 import { loadAccounts, loadHouse, houseMonthly, portfolioSeries } from "../src/lib/metrics";
 import { monthEnd } from "../src/lib/format";
 import { bucketBalanceOnly, taxLotSeries, TAX_BUCKETS } from "../src/lib/taxlots";
@@ -112,21 +114,51 @@ async function main() {
   );
 
   // ------------------------------------------------------- series vs headline
-  console.log("\nMONTH-END SERIES SHARES THE HEADLINE'S RULES");
-  const series = portfolioSeries(accts, houseMonths, scope, primary);
-  const latest = series.months.at(-1);
-  check(
-    "series has a latest point",
-    Boolean(latest),
-    latest ? `through ${latest.date}` : "empty",
+  //
+  // The strongest statement of the whole model: the last point of the chart is
+  // not merely close to the net-worth figure, it is the same number. Anything
+  // that made the two diverge — an account visible to one and not the other, a
+  // sign applied once instead of twice, the house netted in two places — shows
+  // up here as a nonzero delta, in every scope.
+  console.log("\nTHE CHART'S LAST POINT *IS* THE HEADLINE");
+  const histories = await loadAccountHistories(
+    accts.map((a) => a.id),
+    hh.asOf,
+    new Map(
+      hh.accounts
+        .filter((a) => a.balance.value != null)
+        .map((a) => [a.id, a.isActive ? a.balance.value! : 0]),
+    ),
   );
-  if (latest) {
-    console.log(
-      `    live headline ${m(totals.net)} vs last close ${m(latest.balance)} (${latest.date}) — difference ${m(totals.net - latest.balance)}`,
+
+  const scopes: { label: string; scope: Scope }[] = [
+    { label: "Household", scope: DEFAULT_SCOPE },
+    { label: "Household +home", scope: { ...DEFAULT_SCOPE, includeHome: true } },
+    ...hh.people.map((p) => ({
+      label: p.name,
+      scope: { ...DEFAULT_SCOPE, who: p.id } as Scope,
+    })),
+    { label: "Joint", scope: { ...DEFAULT_SCOPE, who: "joint" } as Scope },
+  ];
+
+  for (const { label, scope: sc } of scopes) {
+    const s = portfolioSeries(accts, houseMonths, sc, primary, histories);
+    const live = rollup(hh.accounts, sc, primary).net;
+    const last = s.months.at(-1);
+    check(
+      `${label}: chart ends at the headline`,
+      Boolean(last) && Math.abs(last!.balance - live) < 1,
+      `${m(last?.balance ?? 0)} vs ${m(live)}`,
     );
-    // These legitimately differ (live vs month-end); what must NOT differ is
-    // membership. A liability counted positively, or an excluded account
-    // included, would show up as an implausible gap rather than a real one.
+  }
+
+  const series = portfolioSeries(accts, houseMonths, scope, primary, histories);
+  const latest = series.months.at(-1);
+  if (latest) {
+    const cov = series.months.find((x) => x.fullCoverage);
+    console.log(
+      `    ${series.months.length} months, ${series.months[0].date} -> ${latest.date}; every account represented from ${cov?.date ?? "n/a"}`,
+    );
     const seriesIds = new Set(series.perAccount.map((p) => p.account.id));
     const rollupIds = new Set(
       hh.accounts

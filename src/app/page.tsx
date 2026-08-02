@@ -13,6 +13,7 @@ import {
   rollup,
   weightFor,
 } from "@/lib/household";
+import { loadAccountHistories } from "@/lib/series";
 import { getScope, scopeLabel } from "@/lib/scope";
 import { CATEGORY_META, CATEGORY_ORDER } from "@/lib/categories";
 import { money, moneyDelta, monthLabel, pct } from "@/lib/format";
@@ -29,7 +30,24 @@ export default async function OverviewPage() {
     loadHousehold(),
   ]);
   const houseMonths = house ? houseMonthly(house) : [];
-  const series = portfolioSeries(accts, houseMonths, scope, hh.primaryPersonId);
+  // Resolved month-end balances for every account, so the chart covers the
+  // same accounts the headline does — including the ones Fred has no close for.
+  const histories = await loadAccountHistories(
+    accts.map((a) => a.id),
+    hh.asOf,
+    new Map(
+      hh.accounts
+        .filter((a) => a.balance.value != null)
+        .map((a) => [a.id, a.isActive ? a.balance.value! : 0]),
+    ),
+  );
+  const series = portfolioSeries(
+    accts,
+    houseMonths,
+    scope,
+    hh.primaryPersonId,
+    histories,
+  );
   const { months, byCategory } = series;
 
   // The headline is today's resolved balance, from the same rollup /household
@@ -43,7 +61,12 @@ export default async function OverviewPage() {
   }
 
   const latest = months[months.length - 1];
+  const prevMonth = months[months.length - 2];
   const yearStart = months.filter((m) => m.date < `${latest.date.slice(0, 4)}-01-01`).at(-1);
+  // The month household coverage becomes complete — before it, the total is
+  // real but only covers the accounts Fred knew about then.
+  const coverageFrom = months.find((m) => m.fullCoverage)?.date ?? null;
+  const partialMonths = months.filter((m) => !m.fullCoverage).length;
   const overlays = annualOverlays(months);
   const curYear = Number(latest.date.slice(0, 4));
   const ytdRow = (o: (typeof overlays)["savings"]) => {
@@ -76,16 +99,10 @@ export default async function OverviewPage() {
 
   const label = scopeLabel(scope, hh.people);
   const homeExcluded = totals.excluded.find((e) => e.reason === "primary_residence");
+  // Distinct from "not excluded": a household with no property account at all
+  // shouldn't be told its home equity is included.
+  const hasHome = hh.accounts.some((a) => a.exclusion === "primary_residence");
 
-  // Accounts carrying real money but no close history — the gap between what
-  // the live headline counts and what the chart can draw.
-  const closeTracked = new Set(
-    accts.filter((a) => a.entries.length > 0).map((a) => a.id),
-  );
-  const balanceOnly = accountRows.filter(
-    ({ account, value }) => !closeTracked.has(account.id) && Math.abs(value) > 0.5,
-  );
-  const balanceOnlyTotal = balanceOnly.reduce((s, r) => s + r.value, 0);
 
   // "Current allocation" means current: built from the same live balances as
   // the table beside it, not from the last month-end row of the series.
@@ -112,18 +129,15 @@ export default async function OverviewPage() {
         subtitle={`${label} net worth · balances as of today · history through ${monthLabel(latest.date)}`}
       />
 
-      {/* Deliberately no delta on the headline. It is a live household figure;
-          the series behind any "change since…" covers only close-tracked
-          accounts, because balance-only accounts have no month-end history to
-          difference against. Subtracting one basis from the other would read
-          Kate's entire balance as this year's growth. The change tiles below
-          therefore state their own narrower basis rather than borrowing the
-          headline's. */}
+      {/* The series now covers the same accounts as the headline, so the two
+          share a basis and differencing them is meaningful again. */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
         <StatTile
           label="Net worth"
           value={money(totals.net)}
-          sub={`${totals.counted} accounts · live`}
+          delta={prevMonth ? moneyDelta(latest.balance - prevMonth.balance) : undefined}
+          deltaGood={prevMonth ? latest.balance >= prevMonth.balance : undefined}
+          sub={`${totals.counted} accounts · vs last month`}
         />
         <StatTile label="Assets" value={money(totals.assets)} />
         <StatTile
@@ -135,7 +149,6 @@ export default async function OverviewPage() {
           label="YTD change"
           value={yearStart ? moneyDelta(latest.balance - yearStart.balance) : "–"}
           deltaGood={yearStart ? latest.balance >= yearStart.balance : undefined}
-          sub="close-tracked only"
         />
         <StatTile
           label="YTD savings"
@@ -185,16 +198,17 @@ export default async function OverviewPage() {
 
       <Card
         title="Net worth over time"
-        subtitle={`Month-end balances by category${homeExcluded ? "" : ", home equity included"} · through ${monthLabel(latest.date)}`}
+        subtitle={`Month-end balances by category${hasHome && !homeExcluded ? ", home equity included" : ""} · through ${monthLabel(latest.date)}`}
       >
         <TimeSeriesChart data={byCategory} series={catSeries} stacked height={320} />
-        {balanceOnly.length > 0 && (
+        {coverageFrom && partialMonths > 0 && (
           <p className="mt-3 text-xs text-ink-3">
-            History comes from the monthly close, so this chart ends at{" "}
-            {money(latest.balance)} — {money(balanceOnlyTotal)} of today&apos;s{" "}
-            {money(totals.net)} sits in {balanceOnly.length} balance-only account
-            {balanceOnly.length === 1 ? "" : "s"} that have no month-end history
-            to plot.
+            Every account in view is covered from{" "}
+            <span className="text-ink-2">{monthLabel(coverageFrom)}</span>, when
+            the last of them first reported a balance. The {partialMonths} earlier
+            month{partialMonths === 1 ? "" : "s"} are real but partial — they show
+            only the accounts Fred knew about at the time, which is why the line
+            steps up there rather than because anything was earned.
           </p>
         )}
       </Card>

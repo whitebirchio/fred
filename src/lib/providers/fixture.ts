@@ -1,5 +1,6 @@
 import type {
   ProviderAccount,
+  ProviderBalancePoint,
   ProviderHolding,
   ProviderTransaction,
   SyncProvider,
@@ -59,5 +60,21 @@ export class FixtureProvider implements SyncProvider {
     return load().holdings.filter((h) =>
       accountExternalIds.includes(h.accountExternalId),
     );
+  }
+
+  /** The fixture's whole history is the daily window it already carries. */
+  async fetchBalanceHistory(
+    accountExternalIds: string[],
+  ): Promise<ProviderBalancePoint[]> {
+    const wanted = new Set(accountExternalIds);
+    return load()
+      .accounts.filter((a) => wanted.has(a.externalId))
+      .flatMap((a) =>
+        a.dailyBalances.map((p) => ({
+          accountExternalId: a.externalId,
+          date: p.date,
+          balance: p.balance,
+        })),
+      );
   }
 }

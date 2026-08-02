@@ -5,7 +5,9 @@ import {
   portfolioSeries,
   annualOverlays,
 } from "@/lib/metrics";
-import { isExcluded, loadHousehold, weightFor } from "@/lib/household";
+import { loadHousehold } from "@/lib/household";
+import { loadAccountHistories } from "@/lib/series";
+import { monthLabel } from "@/lib/format";
 import { getScope } from "@/lib/scope";
 import { Card, PageHeader } from "@/components/ui";
 import {
@@ -24,24 +26,30 @@ export default async function SavingsPage() {
     loadHousehold(),
   ]);
   const houseMonths = house ? houseMonthly(house) : [];
-  const { months } = portfolioSeries(accts, houseMonths, scope, hh.primaryPersonId);
+  const histories = await loadAccountHistories(
+    accts.map((a) => a.id),
+    hh.asOf,
+    new Map(
+      hh.accounts
+        .filter((a) => a.balance.value != null)
+        .map((a) => [a.id, a.isActive ? a.balance.value! : 0]),
+    ),
+  );
+  const { months } = portfolioSeries(
+    accts,
+    houseMonths,
+    scope,
+    hh.primaryPersonId,
+    histories,
+  );
   if (months.length === 0) return <p className="text-ink-2">No data yet.</p>;
 
-  // Savings and growth are flow concepts: they exist only where a monthly
-  // close records them. Say how much of the household that actually covers,
-  // rather than implying the accounts without closes simply grew by nothing.
-  const inScope = hh.accounts.filter(
-    (a) => !isExcluded(a, scope) && weightFor(a, scope, hh.primaryPersonId) > 0,
-  );
-  const closeTracked = new Set(
-    accts.filter((a) => a.entries.length > 0).map((a) => a.id),
-  );
-  const covered = inScope.filter((a) => closeTracked.has(a.id));
-  const uncovered = inScope.filter(
-    (a) => !closeTracked.has(a.id) && Math.abs(a.signedBalance) > 0.5,
-  );
+  // Every account now contributes a balance; what varies is whether we can
+  // explain the movement. Months resolved from a provider land in `unknown`.
+  const unknownTotal = months.reduce((s, m) => s + Math.abs(m.unknown), 0);
+  const coverageFrom = months.find((m) => m.fullCoverage)?.date ?? null;
 
-  // cumulative series: balance, contributions, growth, savings
+  // cumulative series: balance, contributions, growth, savings, unknown
   const cumulative: {
     date: string;
     balance: number;
@@ -49,15 +57,18 @@ export default async function SavingsPage() {
     growth: number;
     withdrawals: number;
     savings: number;
+    unknown: number;
   }[] = [];
   {
     let cc = 0,
       cg = 0,
-      cw = 0;
+      cw = 0,
+      cu = 0;
     for (const m of months) {
       cc += m.contributions;
       cg += m.growth;
       cw += m.withdrawals;
+      cu += m.unknown;
       cumulative.push({
         date: m.date,
         balance: m.balance,
@@ -65,11 +76,16 @@ export default async function SavingsPage() {
         growth: Math.round(cg * 100) / 100,
         withdrawals: Math.round(cw * 100) / 100,
         savings: Math.round((cc - cw) * 100) / 100,
+        unknown: Math.round(cu * 100) / 100,
       });
     }
   }
 
-  const monthly = months.map((m) => ({ date: m.date, savings: m.savings }));
+  const monthly = months.map((m) => ({
+    date: m.date,
+    savings: m.savings,
+    unknown: m.unknown,
+  }));
   const overlays = annualOverlays(months);
 
   return (
@@ -79,21 +95,20 @@ export default async function SavingsPage() {
         subtitle="Savings = contributions − withdrawals; growth = market change. Transfers between accounts are excluded."
       />
 
-      {uncovered.length > 0 && (
+      {unknownTotal > 0.5 && (
         <Card>
           <p className="text-xs text-ink-2">
-            Flow history covers{" "}
-            <span className="text-ink">
-              {covered.length} of {inScope.length}
-            </span>{" "}
-            accounts in view. {uncovered.length} balance-only account
-            {uncovered.length === 1 ? "" : "s"} ({uncovered
-              .slice(0, 3)
-              .map((a) => a.name)
-              .join(", ")}
-            {uncovered.length > 3 ? `, +${uncovered.length - 3} more` : ""}) count
-            toward net worth but record no contributions or growth, so they are
-            absent from every chart below.
+            Every account in view is charted below. Where a month&apos;s balance
+            came from the monthly close, its movement is split into
+            contributions, growth and withdrawals. Where it came from a synced
+            source, all we know is that the balance moved — a provider reports
+            what an account is worth, never why. That movement is charted as{" "}
+            <span className="text-ink">Unknown</span> rather than guessed into
+            savings or growth
+            {coverageFrom
+              ? `, and every account is represented from ${monthLabel(coverageFrom)} onward`
+              : ""}
+            . Closing a month replaces its Unknown with the real breakdown.
           </p>
         </Card>
       )}
@@ -101,13 +116,14 @@ export default async function SavingsPage() {
       <div className="grid gap-4 lg:grid-cols-2">
         <Card
           title="Savings vs growth"
-          subtitle="Cumulative: what you saved vs what the market added"
+          subtitle="Cumulative: what you saved, what the market added, and what we can't attribute"
         >
           <TimeSeriesChart
             data={cumulative}
             series={[
               { key: "savings", name: "Savings", color: "var(--series-1)" },
               { key: "growth", name: "Growth", color: "var(--series-2)" },
+              { key: "unknown", name: "Unknown", color: "var(--series-8)" },
             ]}
           />
         </Card>
@@ -121,15 +137,22 @@ export default async function SavingsPage() {
               { key: "balance", name: "Balance", color: "var(--series-1)" },
               { key: "contributions", name: "Contributions", color: "var(--series-2)" },
               { key: "withdrawals", name: "Withdrawals", color: "var(--series-6)" },
+              { key: "unknown", name: "Unknown", color: "var(--series-8)" },
             ]}
           />
         </Card>
       </div>
 
-      <Card title="Monthly savings" subtitle="Contributions − withdrawals, by month">
+      <Card
+        title="Monthly savings"
+        subtitle="Contributions − withdrawals, by month, with unattributable movement alongside"
+      >
         <MonthlyBarChart
           data={monthly}
-          series={[{ key: "savings", name: "Savings", color: "var(--series-1)" }]}
+          series={[
+            { key: "savings", name: "Savings", color: "var(--series-1)" },
+            { key: "unknown", name: "Unknown", color: "var(--series-8)" },
+          ]}
         />
       </Card>
 

@@ -65,6 +65,16 @@ export type ProviderHolding = {
   value: number;
 };
 
+export type ProviderBalancePoint = {
+  accountExternalId: string;
+  date: string; // ISO date
+  /** As the provider signs it — which for a liability usually means negative.
+   *  Fred stores liability balances as positive magnitudes and applies the
+   *  sign at rollup, so the storage boundary normalizes this; getting that
+   *  wrong flips a credit card from a debt into an asset. */
+  balance: number;
+};
+
 export interface SyncProvider {
   readonly name: string;
   /** False when credentials/config are missing — sync UI explains why. */
@@ -73,4 +83,17 @@ export interface SyncProvider {
   fetchTransactions(sinceISO: string): Promise<ProviderTransaction[]>;
   /** May return [] when the provider can't attribute holdings. */
   fetchHoldings(accountExternalIds: string[]): Promise<ProviderHolding[]>;
+  /**
+   * Full balance history for the given accounts — the record that lets an
+   * account with no monthly close still appear in every chart.
+   *
+   * Deliberately separate from fetchAccounts (whose `dailyBalances` only
+   * carries a short trailing window): this costs one request *per account*,
+   * which is far too many subrequests to run inside a routine sync on a
+   * Workers free plan. It is a backfill, run from the CLI; ongoing currency
+   * comes from the trailing window instead.
+   */
+  fetchBalanceHistory(
+    accountExternalIds: string[],
+  ): Promise<ProviderBalancePoint[]>;
 }

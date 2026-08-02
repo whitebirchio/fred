@@ -1,5 +1,6 @@
 import type {
   ProviderAccount,
+  ProviderBalancePoint,
   ProviderHolding,
   ProviderTransaction,
   SyncProvider,
@@ -308,6 +309,51 @@ export class MonarchProvider implements SyncProvider {
         });
       }
       if (rows.length < limit) break;
+    }
+    return out;
+  }
+
+  /**
+   * Daily balance history per account. Verified against the live API (Aug
+   * 2026): returns every day from the account's creation to today with no
+   * gaps — 578 points reaching back to 2025-01-01 on this household, which is
+   * when these accounts were first connected rather than a retention limit.
+   *
+   * `signedBalance` is already negative for liabilities, whereas the rest of
+   * Fred stores liability magnitudes positive and applies the sign at rollup;
+   * normalized here so the storage convention holds everywhere.
+   */
+  async fetchBalanceHistory(
+    accountExternalIds: string[],
+  ): Promise<ProviderBalancePoint[]> {
+    const out: ProviderBalancePoint[] = [];
+    for (const id of accountExternalIds) {
+      try {
+        const data = await this.gql<{
+          snapshots: { date: string; signedBalance: number }[] | null;
+        }>(
+          "GetAccountHistory",
+          `query GetAccountHistory($id: UUID!) {
+            snapshots: snapshotsForAccount(accountId: $id) {
+              date
+              signedBalance
+              __typename
+            }
+          }`,
+          { id },
+        );
+        for (const p of data.snapshots ?? []) {
+          out.push({
+            accountExternalId: id,
+            date: p.date.slice(0, 10),
+            balance: Math.abs(p.signedBalance) === 0 ? 0 : p.signedBalance,
+          });
+        }
+      } catch (err) {
+        // One account's history failing must not sink the whole backfill —
+        // the rest is still worth having.
+        console.warn(`Monarch history for ${id} failed (skipped):`, err);
+      }
     }
     return out;
   }

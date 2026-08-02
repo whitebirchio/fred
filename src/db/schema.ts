@@ -77,6 +77,9 @@ export const accounts = pgTable("accounts", {
   // Note this means "the account no longer exists", not "I stopped using it" —
   // a dormant account still holding money is active.
   isActive: boolean("is_active").notNull().default(true),
+  // When it was archived, so the roster can say "closed Mar 2027" rather than
+  // just greying a row out. Null while active; cleared again on reopen.
+  archivedAt: date("archived_at"),
   // Why this account is held out of net worth, or null when it counts. One
   // column replaces the old include_in_net_worth / include_in_household pair,
   // which conflated two unrelated ideas — "isn't Scott's" and "deliberately

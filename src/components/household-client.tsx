@@ -3,8 +3,10 @@
 import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { money } from "@/lib/format";
-import { CATEGORY_META } from "@/lib/categories";
+import { CATEGORY_META, CATEGORY_ORDER } from "@/lib/categories";
 import { Card, StatTile } from "@/components/ui";
+import { ArchiveAccountControl } from "@/components/archive-account-control";
+import { AddAccountForm } from "@/components/add-account-form";
 import {
   linkSource,
   promoteSource,
@@ -218,6 +220,38 @@ function AccountRow({
             className="flex flex-wrap items-center gap-3 border-t border-edge pt-2 text-ink-2"
           >
             <input type="hidden" name="accountId" value={a.id} />
+            {/* Identity, editable: accounts get renamed in the real world, and
+                a hand-created one needs its typos fixed. */}
+            <label className="flex items-center gap-1.5">
+              Name
+              <input
+                name="name"
+                defaultValue={a.name}
+                className="w-44 rounded border border-edge bg-surface px-1.5 py-1 text-xs text-ink"
+              />
+            </label>
+            <label className="flex items-center gap-1.5">
+              Institution
+              <input
+                name="institution"
+                defaultValue={a.institution ?? ""}
+                className="w-28 rounded border border-edge bg-surface px-1.5 py-1 text-xs text-ink"
+              />
+            </label>
+            <label className="flex items-center gap-1.5">
+              Type
+              <select
+                name="category"
+                defaultValue={a.category}
+                className="rounded border border-edge bg-surface px-1.5 py-1 text-xs text-ink"
+              >
+                {CATEGORY_ORDER.map((c) => (
+                  <option key={c} value={c}>
+                    {CATEGORY_META[c].name}
+                  </option>
+                ))}
+              </select>
+            </label>
             <label className="flex items-center gap-1.5">
               Counts toward net worth
               <select
@@ -268,7 +302,19 @@ function AccountRow({
             </button>
           </form>
 
-          <div className="flex justify-end border-t border-edge pt-2">
+          {/* Lifecycle. Archiving is the everyday action and deleting the rare
+              irreversible one, so they sit at opposite ends. */}
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-edge pt-2">
+            <ArchiveAccountControl
+              accountId={a.id}
+              accountName={a.name}
+              archived={!a.isActive}
+              archivedAt={a.archivedAt}
+              currentValue={a.signedBalance}
+              providerStillReporting={a.sources.some(
+                (s) => s.source !== "fred" && Math.abs(s.value) > 0.5,
+              )}
+            />
             <DeleteAccountControl accountId={a.id} accountName={a.name} />
           </div>
         </div>
@@ -482,6 +528,9 @@ export function HouseholdClient({
   const [owner, setOwner] = useState("all");
   const [category, setCategory] = useState("all");
   const [hideEmpty, setHideEmpty] = useState(true);
+  // The roster answers "what does this household have"; closed accounts are
+  // history, so they stay out of the way until asked for.
+  const [showArchived, setShowArchived] = useState(false);
 
   const owners = useMemo(
     () => [...new Set(accounts.map((a) => a.ownerName))].sort(),
@@ -500,12 +549,20 @@ export function HouseholdClient({
     [accounts, scope, primaryPersonId],
   );
 
+  const archivedCount = useMemo(
+    () => inScope.filter((a) => !a.isActive).length,
+    [inScope],
+  );
+
   const visible = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return inScope.filter((a) => {
+      if (!showArchived && !a.isActive) return false;
       if (owner !== "all" && a.ownerName !== owner) return false;
       if (category !== "all" && a.category !== category) return false;
-      if (hideEmpty && (a.balance.value ?? 0) === 0) return false;
+      // An archived account is legitimately $0, so "hide $0" must not be what
+      // hides it — that is the archived toggle's job.
+      if (hideEmpty && a.isActive && (a.balance.value ?? 0) === 0) return false;
       if (
         needle &&
         !`${a.name} ${a.institutionLabel} ${a.ownerName}`.toLowerCase().includes(needle)
@@ -513,7 +570,7 @@ export function HouseholdClient({
         return false;
       return true;
     });
-  }, [inScope, q, owner, category, hideEmpty]);
+  }, [inScope, q, owner, category, hideEmpty, showArchived]);
 
   // Exactly the function every other screen calls — no second implementation
   // to drift out of step with the first.
@@ -626,6 +683,16 @@ export function HouseholdClient({
           />
           Hide $0
         </label>
+        {archivedCount > 0 && (
+          <label className="flex items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={showArchived}
+              onChange={(e) => setShowArchived(e.target.checked)}
+            />
+            Show archived ({archivedCount})
+          </label>
+        )}
         {sliced && (
           <button
             onClick={() => {
@@ -640,6 +707,10 @@ export function HouseholdClient({
         )}
         <span className="ml-auto text-ink-3">Totals reflect this slice.</span>
       </div>
+
+      {/* Its own row: expanded this is a full form, which has no business
+          living inside an inline filter toolbar. */}
+      <AddAccountForm people={people} />
 
       {groups.map((g) => (
         <Card key={g.label}>

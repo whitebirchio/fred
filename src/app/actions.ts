@@ -351,11 +351,14 @@ export async function promoteSource(formData: FormData) {
       category: category as "cash",
       ownerPersonId: matched?.id ?? null,
       isJoint: token === "joint",
+      ownershipShare: token === "joint" ? 0.5 : 1,
       isActive: ext.isActive,
-      // Household-included by default ("everything in"); the individual
-      // net-worth lens stays opt-in so this can't disturb existing figures.
-      includeInHousehold: true,
-      includeInNetWorth: false,
+      // Counted by default — exclusion is a deliberate act, and an unreviewed
+      // source is held out by its match_status, not by this.
+      exclusion: null,
+      // It arrived from a feed, so it has no statement history and the close
+      // shouldn't ask for one.
+      tracksMonthlyClose: false,
       sortOrder: 500,
     })
     .returning();
@@ -410,9 +413,29 @@ export async function updateHouseholdAccount(formData: FormData) {
   const exclusion = ["primary_residence", "unvested", "other"].includes(exclusionRaw)
     ? exclusionRaw
     : null;
+  // Identity is editable too: accounts get renamed in the real world (an
+  // employer changes, a plan is rolled over), and a hand-created account needs
+  // its typos fixed. Absent fields leave the existing value alone, so callers
+  // that only send household settings keep working.
+  const rawName = String(formData.get("name") ?? "").trim();
+  const rawCategory = String(formData.get("category") ?? "");
+  const rawTax = String(formData.get("taxTreatment") ?? "");
+  const identity: Record<string, unknown> = {};
+  if (rawName) identity.name = rawName;
+  if (formData.has("institution")) {
+    identity.institution = String(formData.get("institution") ?? "").trim() || null;
+  }
+  if ((CATEGORIES as readonly string[]).includes(rawCategory)) {
+    identity.category = rawCategory;
+  }
+  if ((TAX_TREATMENTS as readonly string[]).includes(rawTax)) {
+    identity.taxTreatment = rawTax;
+  }
+
   await db
     .update(accountsTable)
     .set({
+      ...identity,
       exclusion,
       tracksMonthlyClose: formData.get("tracksMonthlyClose") === "on",
       ownerPersonId: isJoint || !ownerRaw ? null : Number(ownerRaw),
@@ -470,9 +493,131 @@ export async function updateExternalAccount(formData: FormData) {
   revalidatePath("/monthly");
 }
 
-export async function toggleAccountActive(formData: FormData) {
+/**
+ * Archive an account, or bring it back.
+ *
+ * Archiving is the non-destructive counterpart to deleteAccount: the account
+ * stops contributing to today's net worth and drops out of the monthly close,
+ * but every statement it ever had stays exactly where it is, so history and
+ * past-year figures are untouched. That is what makes it the right tool for
+ * "I closed this in 2027" — deleting would take fifteen years of statements
+ * with it.
+ *
+ * Any linked provider sources are deliberately left alone. A feed that keeps
+ * reporting a balance for an account you say is closed is a discrepancy worth
+ * seeing on /household, not something to paper over here.
+ */
+export async function setAccountArchived(formData: FormData) {
   const id = Number(formData.get("accountId"));
-  const isActive = String(formData.get("isActive")) === "true";
-  if (id) await db.update(accounts).set({ isActive }).where(eq(accounts.id, id));
+  const archived = String(formData.get("archived")) === "true";
+  if (!id) throw new Error("Missing account id");
+  await db
+    .update(accounts)
+    .set({
+      isActive: !archived,
+      archivedAt: archived ? new Date().toISOString().slice(0, 10) : null,
+    })
+    .where(eq(accounts.id, id));
+  revalidatePath("/household");
+  revalidatePath("/monthly");
+  revalidatePath("/", "layout");
+}
+
+const CATEGORIES = [
+  "cash",
+  "retirement",
+  "hsa",
+  "brokerage",
+  "crypto",
+  "property",
+  "other",
+  "credit",
+  "loan",
+] as const;
+const TAX_TREATMENTS = [
+  "taxable",
+  "traditional",
+  "roth",
+  "hsa",
+  "pension",
+  "na",
+] as const;
+
+/**
+ * Create an account by hand.
+ *
+ * The guided review on /household can only mint accounts that a provider
+ * already knows about. Plenty won't be: a new employer's plan the feed can't
+ * reach, a paper I-bond, a private note. Without this the only way to track
+ * one was to edit the database directly.
+ */
+export async function createAccount(formData: FormData) {
+  const name = String(formData.get("name") ?? "").trim();
+  if (!name) throw new Error("Name is required");
+
+  const rawCategory = String(formData.get("category") ?? "other");
+  const category = (CATEGORIES as readonly string[]).includes(rawCategory)
+    ? rawCategory
+    : "other";
+  const rawTax = String(formData.get("taxTreatment") ?? "na");
+  const taxTreatment = (TAX_TREATMENTS as readonly string[]).includes(rawTax)
+    ? rawTax
+    : "na";
+
+  const ownerRaw = String(formData.get("ownerPersonId") ?? "");
+  const isJoint = ownerRaw === "joint";
+
+  // Slugs are the account's URL, so they must be unique and stable; same
+  // derivation the provider path uses.
+  const baseSlug =
+    name
+      .toLowerCase()
+      .replace(/\(\.\.\.[^)]*\)/g, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 48) || "account";
+  const taken = new Set((await db.select().from(accounts)).map((a) => a.slug));
+  let slug = baseSlug;
+  let i = 2;
+  while (taken.has(slug)) slug = `${baseSlug}-${i++}`;
+
+  const [created] = await db
+    .insert(accounts)
+    .values({
+      slug,
+      name,
+      institution: String(formData.get("institution") ?? "").trim() || null,
+      category: category as (typeof CATEGORIES)[number],
+      taxTreatment: taxTreatment as (typeof TAX_TREATMENTS)[number],
+      ownerPersonId: isJoint || !ownerRaw ? null : Number(ownerRaw),
+      isJoint,
+      ownershipShare: isJoint ? 0.5 : 1,
+      isActive: true,
+      exclusion: null,
+      // A hand-made account has no feed behind it, so the monthly close is the
+      // only way it will ever get a balance.
+      tracksMonthlyClose: true,
+      sortOrder: 500,
+    })
+    .returning();
+
+  // An opening balance is optional but usual — without one the account exists
+  // with no value and shows as "no source has data for this account".
+  const openingBalance = formData.get("openingBalance");
+  const openingMonth = String(formData.get("openingMonth") ?? "");
+  if (openingBalance != null && String(openingBalance).trim() !== "") {
+    const [oy, om] = openingMonth.split("-").map(Number);
+    if (oy && om) {
+      await db.insert(accountEntries).values({
+        accountId: created.id,
+        statementDate: monthEnd(oy, om),
+        balance: num(openingBalance),
+        notes: "Opening balance",
+      });
+    }
+  }
+
+  revalidatePath("/household");
+  revalidatePath("/monthly");
   revalidatePath("/", "layout");
 }

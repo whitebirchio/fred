@@ -250,6 +250,8 @@ export type HouseholdAccount = {
   exclusion: string | null;
   tracksMonthlyClose: boolean;
   isActive: boolean;
+  /** When it was archived, if it was. */
+  archivedAt: string | null;
   hasStatements: boolean;
   connectivity: Connectivity;
   balance: Resolved;
@@ -728,6 +730,7 @@ export async function loadHousehold(asOf?: string): Promise<HouseholdView> {
       exclusion: h.exclusion,
       tracksMonthlyClose: h.tracksMonthlyClose,
       isActive: h.isActive,
+      archivedAt: h.archivedAt,
       hasStatements: Boolean(stmt),
       connectivity,
       balance,

@@ -13,6 +13,7 @@ import { Card, PageHeader, StatTile } from "@/components/ui";
 import { MonthlyBarChart, TimeSeriesChart } from "@/components/charts";
 import { EntryForm } from "@/components/entry-form";
 import { DeleteAccountDetailControl } from "@/components/delete-account-detail-control";
+import { ArchiveAccountControl } from "@/components/archive-account-control";
 import { deleteEntry } from "@/app/actions";
 
 export const dynamic = "force-dynamic";
@@ -238,11 +239,34 @@ export default async function AccountPage({
         </div>
       </Card>
 
+      {/* Closing an account is normal; destroying its history is not. Archive
+          sits above, and apart from, delete. */}
+      <Card title="Account status">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-xs text-ink-3">
+            {account.isActive
+              ? "Archive when the account is closed in the real world: it stops counting toward net worth and leaves the monthly close, and every statement here is kept."
+              : "Archived — counts as $0 toward net worth, history intact."}
+          </p>
+          <ArchiveAccountControl
+            accountId={account.id}
+            accountName={account.name}
+            archived={!account.isActive}
+            archivedAt={account.archivedAt}
+            currentValue={live?.signedBalance ?? 0}
+            providerStillReporting={(live?.sources ?? []).some(
+              (s) => s.source !== "fred" && Math.abs(s.value) > 0.5,
+            )}
+          />
+        </div>
+      </Card>
+
       <Card title="Danger zone">
         <div className="flex items-center justify-between">
           <p className="text-xs text-ink-3">
             Permanently remove this account and its {entries.length} statement{" "}
-            {entries.length === 1 ? "entry" : "entries"} from Fred.
+            {entries.length === 1 ? "entry" : "entries"} from Fred. Archiving is
+            almost always what you want instead.
           </p>
           <DeleteAccountDetailControl accountId={account.id} accountName={account.name} />
         </div>

@@ -10,6 +10,7 @@ import {
   Cell,
   Legend,
   Line,
+  ComposedChart,
   LineChart,
   Pie,
   PieChart,
@@ -145,6 +146,7 @@ export function TimeSeriesChart({
   isPercent = false,
   stacked = false,
   withTable = true,
+  overlay,
 }: {
   data: Record<string, unknown>[];
   series: SeriesDef[];
@@ -152,13 +154,16 @@ export function TimeSeriesChart({
   isPercent?: boolean;
   stacked?: boolean;
   withTable?: boolean;
+  /** A line drawn over a stacked chart — for a total the stack itself can't
+   *  express, such as net worth once liabilities are in the mix. */
+  overlay?: SeriesDef;
 }) {
   const fmt = isPercent ? (v: number) => pct(v) : (v: number) => money(v);
   const axisFmt = isPercent ? (v: number) => pct(v, 0) : compact;
   const gradId = useId();
 
   const chart = stacked ? (
-    <AreaChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 4 }}>
+    <ComposedChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 4 }}>
       <CartesianGrid vertical={false} />
       <XAxis
         dataKey="date"
@@ -182,7 +187,20 @@ export function TimeSeriesChart({
           isAnimationActive={false}
         />
       ))}
-    </AreaChart>
+      {/* Drawn over the bands because a stack cannot show it: positives pile
+          up from zero and negatives hang below, so the top of the colours is
+          assets. This line is the total those bands actually sum to. */}
+      {overlay && (
+        <Line
+          dataKey={overlay.key}
+          name={overlay.name}
+          stroke={overlay.color}
+          strokeWidth={2}
+          dot={false}
+          isAnimationActive={false}
+        />
+      )}
+    </ComposedChart>
   ) : series.length === 1 ? (
     <AreaChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 4 }}>
       <defs>

@@ -249,6 +249,9 @@ export type HouseholdAccount = {
    *  See `accounts.exclusion` in src/db/schema.ts. */
   exclusion: string | null;
   tracksMonthlyClose: boolean;
+  /** Set when this account is tied to a property — the house itself, or a
+   *  mortgage secured against it. Both roll onto one "equity" line. */
+  propertyId: number | null;
   isActive: boolean;
   /** When it was archived, if it was. */
   archivedAt: string | null;
@@ -729,6 +732,7 @@ export async function loadHousehold(asOf?: string): Promise<HouseholdView> {
       ownershipShare: h.ownershipShare,
       exclusion: h.exclusion,
       tracksMonthlyClose: h.tracksMonthlyClose,
+      propertyId: h.propertyId,
       isActive: h.isActive,
       archivedAt: h.archivedAt,
       hasStatements: Boolean(stmt),

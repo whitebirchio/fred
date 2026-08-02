@@ -22,6 +22,11 @@ import { AllocationDonut, TimeSeriesChart } from "@/components/charts";
 
 export const dynamic = "force-dynamic";
 
+// --text-primary, not --ink: the latter exists only as Tailwind's generated
+// --color-ink, so `var(--ink)` silently resolves to nothing and the line
+// renders black — invisible on a dark background.
+const NET_LINE = { key: "net", name: "Net worth", color: "var(--text-primary)" };
+
 export default async function OverviewPage() {
   const scope = await getScope();
   const [accts, house, hh] = await Promise.all([
@@ -79,8 +84,12 @@ export default async function OverviewPage() {
   const ytdRate = ytdRow(overlays.savingsRate);
   const lastHouse = houseMonths.at(-1);
 
+  // Any category that ever carries a value, not just a positive one. Filtering
+  // on `> 0` dropped every liability from the chart, so a graph titled "net
+  // worth" was drawing assets — overstating by the credit cards always, and by
+  // the whole mortgage whenever home equity was switched on.
   const catSeries = CATEGORY_ORDER.filter((c) =>
-    byCategory.some((row) => (row[c] as number) > 0),
+    byCategory.some((row) => Math.abs((row[c] as number) ?? 0) > 0.5),
   ).map((c) => ({ key: c, name: CATEGORY_META[c].name, color: CATEGORY_META[c].color }));
 
   // Balances shown here are the live resolved ones, so a row can't disagree
@@ -106,13 +115,13 @@ export default async function OverviewPage() {
 
   // "Current allocation" means current: built from the same live balances as
   // the table beside it, not from the last month-end row of the series.
+  //
+  // Group *before* discarding non-positive slices, so a mortgage nets against
+  // its house rather than the house showing gross and the debt vanishing.
   const byCategoryNow = new Map<string, number>();
   for (const { account, value } of accountRows) {
-    if (value <= 0) continue; // a donut can only show positive slices
-    byCategoryNow.set(
-      account.category,
-      (byCategoryNow.get(account.category) ?? 0) + value,
-    );
+    const band = account.propertyId != null ? "property" : account.category;
+    byCategoryNow.set(band, (byCategoryNow.get(band) ?? 0) + value);
   }
   const allocation = CATEGORY_ORDER.filter((c) => (byCategoryNow.get(c) ?? 0) > 0.5)
     .map((c) => ({
@@ -121,6 +130,11 @@ export default async function OverviewPage() {
       value: byCategoryNow.get(c)!,
     }))
     .sort((a, b) => b.value - a.value);
+  // A ring can't draw a negative slice, so debts sit outside it. Say so and
+  // say what the ring therefore adds up to, rather than letting it read as
+  // net worth.
+  const allocationTotal = allocation.reduce((s, d) => s + d.value, 0);
+  const allocationOmits = Math.round(allocationTotal - totals.net);
 
   return (
     <div className="space-y-4">
@@ -200,7 +214,13 @@ export default async function OverviewPage() {
         title="Net worth over time"
         subtitle={`Month-end balances by category${hasHome && !homeExcluded ? ", home equity included" : ""} · through ${monthLabel(latest.date)}`}
       >
-        <TimeSeriesChart data={byCategory} series={catSeries} stacked height={320} />
+        <TimeSeriesChart
+          data={byCategory}
+          series={catSeries}
+          overlay={NET_LINE}
+          stacked
+          height={320}
+        />
         {coverageFrom && partialMonths > 0 && (
           <p className="mt-3 text-xs text-ink-3">
             Every account in view is covered from{" "}
@@ -214,7 +234,14 @@ export default async function OverviewPage() {
       </Card>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card title="Current allocation">
+        <Card
+          title="Current allocation"
+          subtitle={
+            allocationOmits > 0.5
+              ? `${money(allocationTotal)} of assets — ${money(allocationOmits)} of debts are netted into net worth but can't be drawn as a slice`
+              : money(allocationTotal)
+          }
+        >
           <AllocationDonut data={allocation} />
         </Card>
         <Card title="Accounts" subtitle="Live balance and where it came from">

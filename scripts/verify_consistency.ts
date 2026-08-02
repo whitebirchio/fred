@@ -22,6 +22,7 @@ import { loadAccountHistories } from "../src/lib/series";
 import { loadAccounts, loadHouse, houseMonthly, portfolioSeries } from "../src/lib/metrics";
 import { monthEnd } from "../src/lib/format";
 import { bucketBalanceOnly, taxLotSeries, TAX_BUCKETS } from "../src/lib/taxlots";
+import { CATEGORY_ORDER } from "../src/lib/categories";
 
 const m = (v: number) =>
   (v < 0 ? "-$" : "$") + Math.abs(v).toLocaleString("en-US", { maximumFractionDigits: 0 });
@@ -150,6 +151,23 @@ async function main() {
       Boolean(last) && Math.abs(last!.balance - live) < 1,
       `${m(last?.balance ?? 0)} vs ${m(live)}`,
     );
+
+    // ...and the *bands* must sum to that line, using the same filter the page
+    // applies. A band silently dropped from the drawing is a chart that
+    // contradicts its own total while every underlying number stays correct —
+    // which is exactly how liabilities went missing.
+    if (last) {
+      const rowNow = s.byCategory[s.byCategory.length - 1];
+      const drawn = CATEGORY_ORDER.filter((c) =>
+        s.byCategory.some((r) => Math.abs((r[c] as number) ?? 0) > 0.5),
+      );
+      const drawnSum = drawn.reduce((t, c) => t + ((rowNow[c] as number) ?? 0), 0);
+      check(
+        `${label}: the bands drawn sum to that line`,
+        Math.abs(drawnSum - last.balance) < 1,
+        `${m(drawnSum)} vs ${m(last.balance)}`,
+      );
+    }
   }
 
   const series = portfolioSeries(accts, houseMonths, scope, primary, histories);

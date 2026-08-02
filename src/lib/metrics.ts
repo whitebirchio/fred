@@ -375,7 +375,12 @@ export function portfolioSeries(
       // credit-card balance would *add* to net worth.
       const bal = signedValue(a.category, lastBalance.get(a.id) ?? 0) * w;
       total += bal;
-      catRow[a.category] = ((catRow[a.category] as number) ?? 0) + bal;
+      // A debt secured against a property belongs on that property's line, so
+      // the band reads as *equity* — market value less what is owed, the same
+      // figure /house calls "Total equity". Charting the house gross with its
+      // mortgage in a separate band shows a house nobody owns outright.
+      const band = a.propertyId != null ? "property" : a.category;
+      catRow[band] = ((catRow[band] as number) ?? 0) + bal;
     }
 
     // The house rides on the property ledger rather than statements, and only
@@ -423,6 +428,11 @@ export function portfolioSeries(
     for (const k of Object.keys(catRow)) {
       if (k !== "date") catRow[k] = round2(catRow[k] as number);
     }
+    // The net line, carried alongside the bands. A stacked area chart piles
+    // positives up from zero and negatives down, so the top edge of the stack
+    // is assets, not net worth — on a chart called "net worth" the actual
+    // figure has to be drawn, not inferred from where the colours stop.
+    catRow.net = round2(total);
     byCategory.push(catRow as PortfolioSeries["byCategory"][number]);
   }
 

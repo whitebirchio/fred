@@ -419,6 +419,10 @@ export async function verificationDiffs() {
     .where(sql`${externalAccounts.linkedAccountId} is not null`);
 
   const out: {
+    // The row's identity is the *source*, not the account: several sources can
+    // describe one account by design (an HSA split into cash + investments),
+    // so keying a list on the account would collide.
+    externalId: number;
     externalName: string;
     fredName: string;
     fredSlug: string;
@@ -489,6 +493,7 @@ export async function verificationDiffs() {
     }
 
     out.push({
+      externalId: row.externalId,
       externalName: row.externalName,
       fredName: fred.name,
       fredSlug: fred.slug,

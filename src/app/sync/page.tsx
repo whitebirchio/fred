@@ -1,5 +1,6 @@
 import { desc } from "drizzle-orm";
-import { db, externalTransactions, persons } from "@/db";
+import Link from "next/link";
+import { db, externalTransactions } from "@/db";
 import { getProvider } from "@/lib/providers";
 import { monarchCredentialsStatus } from "@/lib/monarch-credentials";
 import { loadSyncState, verificationDiffs } from "@/lib/sync";
@@ -14,13 +15,12 @@ export const dynamic = "force-dynamic";
 
 export default async function SyncPage() {
   const scope = await getScope();
-  const [provider, credStatus, { externals, runs, allAccounts }, diffs, people, hh, recentTx] =
+  const [provider, credStatus, { externals, runs, allAccounts }, diffs, hh, recentTx] =
     await Promise.all([
       getProvider(),
       monarchCredentialsStatus(),
       loadSyncState(),
       verificationDiffs(),
-      db.select().from(persons),
       loadHousehold(),
       db
         .select()
@@ -41,6 +41,7 @@ export default async function SyncPage() {
   // disagreed with the review queue.)
   const unreviewed = externals.filter((e) => e.matchStatus === "pending").length;
   const extById = new Map(externals.map((e) => [e.id, e]));
+  const accountById = new Map(allAccounts.map((a) => [a.id, a]));
 
   // Monarch's token lifetime is undocumented and can be as short as hours —
   // surface how stale it is rather than let it be a surprise on the next
@@ -137,7 +138,15 @@ export default async function SyncPage() {
 
       <Card
         title="External accounts"
-        subtitle="Link = the same real account Fred already tracks (verification only); unlinked accounts are additive — opt them into the household total"
+        subtitle="What the provider reports and which household account each source feeds. Linking, ownership and inclusion are decided on Household — a source is evidence about an account, never an account itself."
+        action={
+          <Link
+            href="/household"
+            className="rounded-lg border border-edge px-2.5 py-1 text-xs font-medium text-ink-2 hover:bg-surface-2"
+          >
+            {unreviewed > 0 ? `Review ${unreviewed} →` : "Manage on Household →"}
+          </Link>
+        }
       >
         {externals.length === 0 ? (
           <p className="text-sm text-ink-3">
@@ -148,8 +157,12 @@ export default async function SyncPage() {
             <ExternalAccountRow
               key={e.id}
               external={e}
-              fredAccounts={allAccounts.map((a) => ({ id: a.id, name: a.name }))}
-              people={people.map((p) => ({ id: p.id, name: p.name }))}
+              linkedAccountName={
+                e.linkedAccountId ? (accountById.get(e.linkedAccountId)?.name ?? null) : null
+              }
+              linkedAccountSlug={
+                e.linkedAccountId ? (accountById.get(e.linkedAccountId)?.slug ?? null) : null
+              }
             />
           ))
         )}
@@ -174,7 +187,7 @@ export default async function SyncPage() {
               </thead>
               <tbody>
                 {diffs.map((d) => (
-                  <tr key={d.fredSlug} className="border-t border-edge">
+                  <tr key={d.externalId} className="border-t border-edge">
                     <td className="py-1.5 pr-2">
                       {d.fredName}
                       <span className="ml-1 text-xs text-ink-3">

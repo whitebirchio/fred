@@ -1,10 +1,48 @@
-"use client";
-
-import { useTransition } from "react";
-import { updateExternalAccount } from "@/app/actions";
+import Link from "next/link";
 import { money } from "@/lib/format";
 
-type Props = {
+// One synced source, reported rather than edited.
+//
+// This row used to carry Link / Owner / Household / share controls, from
+// before /household existed. Three of them wrote columns the calculation layer
+// stopped reading when ownership moved onto the hub account, so they saved
+// successfully and changed nothing. The fourth set linked_account_id without
+// match_status, which could leave a source looking linked while still counting
+// toward nothing.
+//
+// Account management belongs on /household, where linking goes through review
+// (and so sets status correctly) and ownership edits actually reach the
+// numbers. /sync answers a different question — is the feed healthy, and what
+// did it bring in — so this is now a read-only view of exactly that.
+
+const STATUS: Record<string, { label: string; tone: string; title: string }> = {
+  confirmed: {
+    label: "linked",
+    tone: "text-good",
+    title: "Counted through the household account it belongs to.",
+  },
+  auto: {
+    label: "auto-linked",
+    tone: "text-good",
+    title: "Machine-matched to a household account; counted, and reversible on Household.",
+  },
+  pending: {
+    label: "needs review",
+    tone: "text-bad",
+    title: "Not counted toward anything until reviewed on Household.",
+  },
+  ignored: {
+    label: "ignored",
+    tone: "text-ink-3",
+    title: "Deliberately excluded. Never counted.",
+  },
+};
+
+export function ExternalAccountRow({
+  external,
+  linkedAccountName,
+  linkedAccountSlug,
+}: {
   external: {
     id: number;
     name: string;
@@ -12,94 +50,61 @@ type Props = {
     accountType: string | null;
     currentBalance: number;
     balanceAsOf: string | null;
-    isAsset: boolean;
-    linkedAccountId: number | null;
-    ownerPersonId: number | null;
-    includeInHousehold: boolean;
-    ownershipShare: number;
+    matchStatus: string;
+    connectionStatus: string;
+    disconnectedAt: string | null;
   };
-  fredAccounts: { id: number; name: string }[];
-  people: { id: number; name: string }[];
-};
-
-export function ExternalAccountRow({ external, fredAccounts, people }: Props) {
-  const [pending, startTransition] = useTransition();
+  linkedAccountName: string | null;
+  linkedAccountSlug: string | null;
+}) {
+  const status = STATUS[external.matchStatus] ?? {
+    label: external.matchStatus,
+    tone: "text-ink-3",
+    title: "",
+  };
+  const broken = external.connectionStatus === "broken";
 
   return (
-    <form
-      action={(fd) => startTransition(() => updateExternalAccount(fd))}
-      className={`grid grid-cols-2 items-center gap-2 border-t border-edge py-2 text-sm sm:grid-cols-[1fr_auto_auto_auto_auto_auto] ${
-        pending ? "opacity-50" : ""
-      }`}
-    >
-      <input type="hidden" name="externalAccountId" value={external.id} />
+    <div className="grid grid-cols-2 items-center gap-2 border-t border-edge py-2 text-sm sm:grid-cols-[1fr_auto_auto_auto]">
       <div className="col-span-2 sm:col-span-1">
         <div className="font-medium text-ink">{external.name}</div>
         <div className="text-xs text-ink-3">
           {external.institution ?? "—"} · {external.accountType}
           {external.balanceAsOf && ` · as of ${external.balanceAsOf}`}
+          {broken && (
+            <span className="ml-1 text-bad">
+              · connection broken
+              {external.disconnectedAt ? ` since ${external.disconnectedAt}` : ""},
+              reconnect in Monarch
+            </span>
+          )}
+          {external.connectionStatus === "manual" && (
+            <span className="ml-1 text-ink-3">· manual in Monarch</span>
+          )}
         </div>
       </div>
       <div className="text-right tabular-nums text-ink">
         {money(external.currentBalance)}
       </div>
-      <label className="text-xs text-ink-3">
-        Link
-        <select
-          name="linkedAccountId"
-          defaultValue={external.linkedAccountId ?? ""}
-          className="ml-1 rounded-lg border border-edge bg-surface px-1.5 py-1 text-xs text-ink"
-        >
-          <option value="">— additive —</option>
-          {fredAccounts.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="text-xs text-ink-3">
-        Owner
-        <select
-          name="ownerPersonId"
-          defaultValue={external.ownerPersonId ?? ""}
-          className="ml-1 rounded-lg border border-edge bg-surface px-1.5 py-1 text-xs text-ink"
-        >
-          <option value="">Joint / —</option>
-          {people.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="flex items-center gap-1.5 text-xs text-ink-3">
-        <input
-          type="checkbox"
-          name="includeInHousehold"
-          defaultChecked={external.includeInHousehold}
-          disabled={external.linkedAccountId != null}
-          title={
-            external.linkedAccountId != null
-              ? "Linked accounts are already counted through the account they belong to"
-              : undefined
-          }
-        />
-        Household
-        <input
-          inputMode="decimal"
-          name="ownershipShare"
-          defaultValue={external.ownershipShare}
-          className="w-12 rounded-lg border border-edge bg-surface px-1.5 py-1 text-right text-xs tabular-nums text-ink"
-          title="Share of this account counted toward household"
-        />
-      </label>
-      <button
-        disabled={pending}
-        className="justify-self-end rounded-lg border border-edge px-2.5 py-1 text-xs font-medium text-ink-2 hover:bg-surface-2 disabled:opacity-50"
+      <div className="text-right text-xs">
+        {linkedAccountName && linkedAccountSlug ? (
+          <Link
+            href={`/accounts/${linkedAccountSlug}`}
+            className="text-ink-2 hover:underline"
+            title="The household account this source is evidence about."
+          >
+            → {linkedAccountName}
+          </Link>
+        ) : (
+          <span className="text-ink-3">—</span>
+        )}
+      </div>
+      <span
+        className={`justify-self-end text-[11px] ${status.tone}`}
+        title={status.title}
       >
-        {pending ? "Saving…" : "Save"}
-      </button>
-    </form>
+        {status.label}
+      </span>
+    </div>
   );
 }

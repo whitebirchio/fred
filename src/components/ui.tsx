@@ -5,11 +5,15 @@ export function Card({
   title,
   subtitle,
   children,
+  action,
   className = "",
 }: {
   title?: string;
   subtitle?: string;
   children: ReactNode;
+  /** Optional control in the header — for sending the reader somewhere the
+   *  card describes but deliberately doesn't do itself. */
+  action?: ReactNode;
   className?: string;
 }) {
   return (
@@ -17,9 +21,12 @@ export function Card({
       className={`rounded-xl border border-edge bg-surface p-4 sm:p-5 ${className}`}
     >
       {title && (
-        <header className="mb-3">
-          <h2 className="text-sm font-semibold text-ink">{title}</h2>
-          {subtitle && <p className="mt-0.5 text-xs text-ink-3">{subtitle}</p>}
+        <header className="mb-3 flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold text-ink">{title}</h2>
+            {subtitle && <p className="mt-0.5 text-xs text-ink-3">{subtitle}</p>}
+          </div>
+          {action && <div className="shrink-0">{action}</div>}
         </header>
       )}
       {children}

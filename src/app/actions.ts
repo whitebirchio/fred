@@ -473,25 +473,18 @@ export async function autoMatchNow() {
   revalidatePath("/", "layout");
 }
 
-export async function updateExternalAccount(formData: FormData) {
-  const { externalAccounts } = await import("@/db/schema");
-  const id = Number(formData.get("externalAccountId"));
-  if (!id) throw new Error("Missing external account id");
-  const linkedRaw = String(formData.get("linkedAccountId") ?? "");
-  const ownerRaw = String(formData.get("ownerPersonId") ?? "");
-  const share = num(formData.get("ownershipShare"));
-  await db
-    .update(externalAccounts)
-    .set({
-      linkedAccountId: linkedRaw ? Number(linkedRaw) : null,
-      ownerPersonId: ownerRaw ? Number(ownerRaw) : null,
-      includeInHousehold: formData.get("includeInHousehold") === "on",
-      ownershipShare: share > 0 && share <= 1 ? share : 1,
-    })
-    .where(eq(externalAccounts.id, id));
-  revalidatePath("/sync");
-  revalidatePath("/monthly");
-}
+/* updateExternalAccount removed (2026-08-02).
+ *
+ * It backed the editing controls on /sync's external-account rows. Three of
+ * the four fields it wrote — include_in_household, ownership_share and
+ * owner_person_id on external_accounts — stopped being read when ownership
+ * moved onto the hub account, so saving them changed nothing anywhere. The
+ * fourth set linked_account_id without match_status, which could leave a
+ * source looking linked while still counting toward nothing.
+ *
+ * Linking now goes through /household's review (linkSource / promoteSource /
+ * ignoreSource / unlinkSource), which sets both fields together.
+ */
 
 /**
  * Archive an account, or bring it back.

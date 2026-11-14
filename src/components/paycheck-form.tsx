@@ -24,6 +24,24 @@ function addDays(iso: string, n: number): string {
 
 const key = (section: Section, name: string) => `${section}:${name}`;
 
+/**
+ * Money as it should read in a field: two decimals and thousands separators,
+ * so a stub shows 9.80 and 8,655.77 rather than 9.8 and 8655.77.
+ *
+ * Applied on blur rather than on every keystroke — reformatting as you type
+ * fights the caret and makes "9." impossible to pass through on the way to
+ * "9.05". An empty field stays empty, because blank and 0.00 mean different
+ * things here: a line you haven't filled in versus one that really was zero.
+ */
+function fmtMoney(v: string | number): string {
+  const s = String(v).trim();
+  if (s === "") return "";
+  return parseMoney(s).toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
 export function PaycheckForm({ catalog }: { catalog: EmployerCatalog[] }) {
   const [employerId, setEmployerId] = useState(
     () => catalog[0]?.employerId ?? 0,
@@ -38,7 +56,8 @@ export function PaycheckForm({ catalog }: { catalog: EmployerCatalog[] }) {
     const values: Record<string, string> = {};
     for (const section of SECTIONS) {
       for (const line of c?.lines[section] ?? []) {
-        if (line.current) values[key(section, line.name)] = String(line.lastValue);
+        if (line.current)
+          values[key(section, line.name)] = fmtMoney(line.lastValue);
       }
     }
     return values;
@@ -48,6 +67,16 @@ export function PaycheckForm({ catalog }: { catalog: EmployerCatalog[] }) {
     seed(catalog[0]),
   );
   const [extra, setExtra] = useState<Record<Section, string[]>>(() => ({
+    income: [],
+    preTax: [],
+    taxes: [],
+    postTax: [],
+  }));
+  // Lines taken off this stub. Kept as "removed" rather than deleted outright
+  // because the catalog is derived from history and would simply put them
+  // back: payroll dropping a deduction is a fact about this cheque, not a
+  // correction to the previous ones.
+  const [removed, setRemoved] = useState<Record<Section, string[]>>(() => ({
     income: [],
     preTax: [],
     taxes: [],
@@ -69,9 +98,9 @@ export function PaycheckForm({ catalog }: { catalog: EmployerCatalog[] }) {
   const [payBegin, setPayBegin] = useState("");
   const [payEnd, setPayEnd] = useState("");
   const [annualSalary, setAnnualSalary] = useState(
-    String(catalog[0]?.last?.annualSalary ?? ""),
+    fmtMoney(catalog[0]?.last?.annualSalary ?? ""),
   );
-  const [netPay, setNetPay] = useState(String(catalog[0]?.last?.netPay ?? ""));
+  const [netPay, setNetPay] = useState(fmtMoney(catalog[0]?.last?.netPay ?? ""));
 
   // Switching employer switches vocabulary, so the typed stub no longer means
   // anything — re-seed rather than carry LM's lines over to a Trellis stub.
@@ -80,9 +109,10 @@ export function PaycheckForm({ catalog }: { catalog: EmployerCatalog[] }) {
     setLastEmployer(employerId);
     setValues(seed(employer));
     setExtra({ income: [], preTax: [], taxes: [], postTax: [] });
+    setRemoved({ income: [], preTax: [], taxes: [], postTax: [] });
     setPaymentDate(nextPayday);
-    setAnnualSalary(String(employer?.last?.annualSalary ?? ""));
-    setNetPay(String(employer?.last?.netPay ?? ""));
+    setAnnualSalary(fmtMoney(employer?.last?.annualSalary ?? ""));
+    setNetPay(fmtMoney(employer?.last?.netPay ?? ""));
     setResult(null);
     setAck(false);
   }
@@ -111,23 +141,49 @@ export function PaycheckForm({ catalog }: { catalog: EmployerCatalog[] }) {
   );
 
   const linesFor = (section: Section) => {
+    const gone = removed[section];
     const known = employer?.lines[section] ?? [];
-    const names = [
-      ...known.filter((l) => l.current || showRetired).map((l) => l.name),
-      ...extra[section],
-    ];
+    const names: string[] = [];
+    const push = (n: string) => {
+      if (!gone.includes(n) && !names.includes(n)) names.push(n);
+    };
+    for (const l of known) if (l.current || showRetired) push(l.name);
+    // Explicitly added lines always render, even ones the employer knows but
+    // isn't currently using — asking for a line back has to be enough on its
+    // own, or adding "Bonus" to a stub that has no bonus yet does nothing.
+    for (const n of extra[section]) push(n);
     // A retired line still shows while it holds a value, so a stub that
     // revives one (an HSA restarting) never hides what it is about to save.
     for (const l of known) {
-      if (!names.includes(l.name) && parseMoney(values[key(section, l.name)]) !== 0) {
-        names.push(l.name);
-      }
+      if (parseMoney(values[key(section, l.name)]) !== 0) push(l.name);
     }
     return names;
   };
 
+  /** Take a line off this stub: it stops rendering, so it is never submitted. */
+  const removeLine = (section: Section, name: string) => {
+    setRemoved((r) => ({ ...r, [section]: [...r[section], name] }));
+    setValues((v) => {
+      const next = { ...v };
+      delete next[key(section, name)];
+      return next;
+    });
+  };
+
+  /** Known names not currently on the stub — offered when adding one back. */
+  const addableIn = (section: Section) => {
+    const shown = new Set(linesFor(section));
+    return (employer?.lines[section] ?? [])
+      .map((l) => l.name)
+      .filter((n) => !shown.has(n));
+  };
+
   const retiredCount = SECTIONS.reduce(
-    (a, s) => a + (employer?.lines[s] ?? []).filter((l) => !l.current).length,
+    (a, s) =>
+      a +
+      (employer?.lines[s] ?? []).filter(
+        (l) => !l.current && !removed[s].includes(l.name),
+      ).length,
     0,
   );
 
@@ -185,6 +241,7 @@ export function PaycheckForm({ catalog }: { catalog: EmployerCatalog[] }) {
             name="annualSalary"
             value={annualSalary}
             onChange={(e) => setAnnualSalary(e.target.value)}
+            onBlur={(e) => setAnnualSalary(fmtMoney(e.target.value))}
             className="mt-1 w-full rounded-lg border border-edge bg-surface px-2 py-1.5 text-sm tabular-nums text-ink"
           />
         </label>
@@ -201,27 +258,48 @@ export function PaycheckForm({ catalog }: { catalog: EmployerCatalog[] }) {
             </h4>
             <div className="space-y-1.5">
               {linesFor(section).map((name) => (
-                <label
+                <div
                   key={name}
-                  className="flex items-center justify-between gap-2 text-xs text-ink-2"
+                  className="flex items-center justify-between gap-1.5 text-xs text-ink-2"
                 >
-                  <span className="min-w-0 flex-1 truncate" title={name}>
-                    {name}
-                  </span>
-                  <input
-                    inputMode="decimal"
-                    name={itemFieldName(section, name)}
-                    value={values[key(section, name)] ?? ""}
-                    onChange={(e) =>
-                      setValues((v) => ({
-                        ...v,
-                        [key(section, name)]: e.target.value,
-                      }))
-                    }
-                    placeholder="0"
-                    className="w-24 shrink-0 rounded-md border border-edge bg-surface px-1.5 py-1 text-right text-sm tabular-nums text-ink"
-                  />
-                </label>
+                  <label
+                    className="flex min-w-0 flex-1 items-center gap-2"
+                    title={name}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{name}</span>
+                    <input
+                      inputMode="decimal"
+                      name={itemFieldName(section, name)}
+                      value={values[key(section, name)] ?? ""}
+                      onChange={(e) =>
+                        setValues((v) => ({
+                          ...v,
+                          [key(section, name)]: e.target.value,
+                        }))
+                      }
+                      onBlur={() =>
+                        setValues((v) => ({
+                          ...v,
+                          [key(section, name)]: fmtMoney(v[key(section, name)] ?? ""),
+                        }))
+                      }
+                      placeholder="0.00"
+                      className="w-24 shrink-0 rounded-md border border-edge bg-surface px-1.5 py-1 text-right text-sm tabular-nums text-ink"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => removeLine(section, name)}
+                    aria-label={`Remove ${name}`}
+                    title={`Remove ${name} from this stub`}
+                    // Always visible, not hover-revealed: Fred is used as an
+                    // installed PWA on a phone, where there is no hover and a
+                    // control that needs one may as well not exist.
+                    className="shrink-0 rounded px-1 text-base leading-none text-ink-3 hover:text-bad"
+                  >
+                    ×
+                  </button>
+                </div>
               ))}
               {linesFor(section).length === 0 && (
                 <p className="text-xs text-ink-3">No lines yet.</p>
@@ -231,17 +309,35 @@ export function PaycheckForm({ catalog }: { catalog: EmployerCatalog[] }) {
               <div className="mt-2 flex gap-1">
                 <input
                   autoFocus
+                  list={`known-${section}`}
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   placeholder="Line name"
                   className="min-w-0 flex-1 rounded-md border border-edge bg-surface px-1.5 py-1 text-xs text-ink"
                 />
+                <datalist id={`known-${section}`}>
+                  {addableIn(section).map((n) => (
+                    <option key={n} value={n} />
+                  ))}
+                </datalist>
                 <button
                   type="button"
                   onClick={() => {
                     const n = newName.trim();
                     if (n) {
-                      setExtra((x) => ({ ...x, [section]: [...x[section], n] }));
+                      // `extra` means "on this stub", whether or not the
+                      // employer has used the line before; `removed` has to be
+                      // cleared too, or re-adding what you just took off would
+                      // stay hidden.
+                      setRemoved((r) => ({
+                        ...r,
+                        [section]: r[section].filter((x) => x !== n),
+                      }));
+                      setExtra((x) =>
+                        x[section].includes(n)
+                          ? x
+                          : { ...x, [section]: [...x[section], n] },
+                      );
                       setValues((v) => ({ ...v, [key(section, n)]: "" }));
                     }
                     setNewName("");
@@ -323,6 +419,7 @@ export function PaycheckForm({ catalog }: { catalog: EmployerCatalog[] }) {
               name="netPay"
               value={netPay}
               onChange={(e) => setNetPay(e.target.value)}
+              onBlur={(e) => setNetPay(fmtMoney(e.target.value))}
               required
               className={`ml-1 w-28 rounded-md border bg-surface px-1.5 py-1 text-right text-sm tabular-nums text-ink ${
                 ties ? "border-edge" : "border-bad/60"

@@ -5,11 +5,18 @@ import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { db } from "@/db";
 import { SCOPE_COOKIE } from "@/lib/scope";
-import { monthEnd } from "@/lib/format";
+import { dateLabel, money, monthEnd } from "@/lib/format";
+import {
+  SECTIONS,
+  deriveStub,
+  itemsFromFormData,
+  parseMoney,
+} from "@/lib/paystubs";
 import {
   accountEntries,
   accounts,
   appConfig,
+  employers,
   paychecks,
   propertyPayments,
   propertyPaymentShares,
@@ -20,6 +27,12 @@ import {
 const num = (v: FormDataEntryValue | null) => {
   const n = parseFloat(String(v ?? "").replace(/[$,]/g, ""));
   return Number.isFinite(n) ? Math.round(n * 100) / 100 : 0;
+};
+
+/** An optional ISO date field: blank or malformed becomes null, not today. */
+const dateOrNull = (v: FormDataEntryValue | null) => {
+  const s = String(v ?? "").trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
 };
 
 /**
@@ -223,27 +236,114 @@ export async function addValuation(formData: FormData) {
   revalidatePath("/", "layout");
 }
 
-export async function addPaycheck(formData: FormData) {
+export type SaveResult = { ok: boolean; message: string };
+
+/**
+ * Store one pay stub, line item by line item.
+ *
+ * The quick-entry form this replaces asked for eight numbers — gross, net,
+ * federal tax, total taxes, 401(k), HSA, bonus, salary — while an LM stub has
+ * 33 lines, and it collapsed Traditional/Roth/After-Tax 401(k) into a single
+ * figure even though tax character is a dimension the rest of Fred models.
+ * `paychecks.items` has always had room for the full breakdown; only the form
+ * was lossy, which is why the paycheck ledger went unmaintained from
+ * 2026-05-01 while the spreadsheet kept going.
+ *
+ * So: the line items are the input, and every denormalised column is derived
+ * from them here (`deriveStub`, which encodes the workbook's own formulas).
+ * Nothing that can be computed is typed twice.
+ */
+export async function savePaycheck(formData: FormData): Promise<SaveResult> {
   const employerId = Number(formData.get("employerId"));
-  const paymentDate = String(formData.get("paymentDate"));
+  const paymentDate = String(formData.get("paymentDate") ?? "");
   if (!employerId || !/^\d{4}-\d{2}-\d{2}$/.test(paymentDate)) {
-    throw new Error("Missing employer or date");
+    return { ok: false, message: "Pick an employer and a payment date." };
   }
-  const totalIncome = num(formData.get("totalIncome"));
-  const netPay = num(formData.get("netPay"));
-  await db.insert(paychecks).values({
+
+  // The slug decides which income lines are imputed, so read it from the
+  // database rather than trusting a field the client could have rewritten.
+  const [employer] = await db
+    .select()
+    .from(employers)
+    .where(eq(employers.id, employerId))
+    .limit(1);
+  if (!employer) return { ok: false, message: "That employer no longer exists." };
+
+  const items = itemsFromFormData(formData.entries());
+  const lineCount = SECTIONS.reduce(
+    (a, s) => a + Object.keys(items[s]).length,
+    0,
+  );
+  if (lineCount === 0) {
+    return { ok: false, message: "Every line is zero — nothing to save." };
+  }
+
+  const netPay = parseMoney(formData.get("netPay"));
+  const totals = deriveStub(items, employer.slug);
+  const gap = Math.round((totals.computedNet - netPay) * 100) / 100;
+
+  // The workbook's Checksum column, enforced. A stub that doesn't tie out is
+  // usually a typo or a missed line, and storing it would quietly corrupt
+  // every income rollup — but it can be legitimate (HS's RSU/GTL offsets
+  // never balanced), so it is refusable rather than forbidden.
+  if (Math.abs(gap) > 0.01 && formData.get("acknowledgeMismatch") !== "1") {
+    return {
+      ok: false,
+      message:
+        `Doesn't tie out: income − deductions = ${money(totals.computedNet, true)}, ` +
+        `but net pay reads ${money(netPay, true)} (off by ${money(gap, true)}). ` +
+        `Fix a line, or tick "save anyway".`,
+    };
+  }
+
+  const row = {
     employerId,
     paymentDate,
-    annualSalary: formData.get("annualSalary") ? num(formData.get("annualSalary")) : null,
-    totalIncome,
+    payBeginDate: dateOrNull(formData.get("payBeginDate")),
+    payEndDate: dateOrNull(formData.get("payEndDate")),
+    annualSalary: formData.get("annualSalary")
+      ? parseMoney(formData.get("annualSalary"))
+      : null,
+    totalIncome: totals.totalIncome,
     netPay,
-    federalTax: num(formData.get("federalTax")),
-    totalTaxes: num(formData.get("totalTaxes")),
-    retirement401k: num(formData.get("retirement401k")),
-    hsa: num(formData.get("hsa")),
-    bonus: num(formData.get("bonus")),
-  });
+    federalTax: totals.federalTax,
+    totalTaxes: totals.taxesTotal,
+    retirement401k: totals.retirement401k,
+    hsa: totals.hsa,
+    bonus: totals.bonus,
+    items,
+  };
+
+  // No unique index to lean on, because two stubs really can share a date (HS
+  // paid twice on 2018-07-13). Re-entering a date you already have means you
+  // are correcting it, so update in place and say which it was.
+  const [existing] = await db
+    .select({ id: paychecks.id })
+    .from(paychecks)
+    .where(
+      and(
+        eq(paychecks.employerId, employerId),
+        eq(paychecks.paymentDate, paymentDate),
+      ),
+    )
+    .limit(1);
+
+  if (existing) {
+    await db.update(paychecks).set(row).where(eq(paychecks.id, existing.id));
+  } else {
+    await db.insert(paychecks).values(row);
+  }
+
   revalidatePath("/", "layout");
+  const note =
+    Math.abs(gap) > 0.01 ? ` (saved with a ${money(gap, true)} discrepancy)` : "";
+  return {
+    ok: true,
+    message:
+      `${existing ? "Updated" : "Saved"} ${employer.name} stub for ` +
+      `${dateLabel(paymentDate)} — ${lineCount} line items, ` +
+      `${money(totals.totalIncome, true)} gross, ${money(netPay, true)} net${note}.`,
+  };
 }
 
 export async function savePlanAssumptions(formData: FormData) {

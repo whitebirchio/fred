@@ -14,6 +14,7 @@ import {
   appConfig,
 } from "@/db/schema";
 import { monthEnd } from "./format";
+import { SECTIONS, type Section, type StubItems } from "./paystubs";
 import type { AccountHistory, MonthPointForAccount } from "./series";
 import {
   DEFAULT_SCOPE,
@@ -118,6 +119,123 @@ export async function loadHouse() {
     .orderBy(asc(propertyValuations.date));
   const people = await db.select().from(persons);
   return { property, payments, shares, valuations, people };
+}
+
+// ---------------------------------------------------------------------------
+// Pay-stub entry vocabulary
+// ---------------------------------------------------------------------------
+
+export type CatalogLine = {
+  name: string;
+  /** How many stubs this line has ever appeared on. */
+  seen: number;
+  lastSeen: string;
+  /** What it was on the most recent stub that had it — the entry default. */
+  lastValue: number;
+  /** On the newest stub for this employer, so still a live payroll line. */
+  current: boolean;
+};
+
+export type EmployerCatalog = {
+  employerId: number;
+  slug: string;
+  name: string;
+  isActive: boolean;
+  lines: Record<Section, CatalogLine[]>;
+  /** The newest stub, for "copy last stub" and for the cadence hint. */
+  last:
+    | {
+        paymentDate: string;
+        payBeginDate: string | null;
+        payEndDate: string | null;
+        annualSalary: number | null;
+        netPay: number;
+      }
+    | undefined;
+};
+
+/**
+ * The line items each employer actually uses, learned from the stubs already
+ * stored rather than from a table someone has to maintain.
+ *
+ * `items` has carried the full four-section breakdown since the seed, so the
+ * vocabulary is already in the database — LM has 33 distinct lines across its
+ * history but only ~13 on a current cheque. The form leans on `current` to
+ * show today's payroll and tuck the retired lines (Vision, Group Life, the
+ * commuter benefits) out of the way without losing them.
+ */
+export async function loadPaycheckCatalog(): Promise<EmployerCatalog[]> {
+  const emps = await db.select().from(employers);
+  const checks = await db
+    .select()
+    .from(paychecks)
+    .orderBy(asc(paychecks.paymentDate), asc(paychecks.id));
+
+  return emps
+    .map((e) => {
+      const mine = checks.filter((c) => c.employerId === e.id);
+      const newest = mine.at(-1);
+      const lines = {} as Record<Section, CatalogLine[]>;
+
+      for (const section of SECTIONS) {
+        const acc = new Map<string, CatalogLine>();
+        for (const c of mine) {
+          const items = (c.items ?? {}) as Partial<StubItems>;
+          for (const [name, value] of Object.entries(items[section] ?? {})) {
+            if (typeof value !== "number") continue;
+            const prev = acc.get(name);
+            // `mine` is in date order, so a later stub simply overwrites the
+            // defaults — lastValue/lastSeen end up describing the newest
+            // appearance without a second pass.
+            acc.set(name, {
+              name,
+              seen: (prev?.seen ?? 0) + 1,
+              lastSeen: c.paymentDate,
+              lastValue: value,
+              current: false,
+            });
+          }
+        }
+        const onNewest = new Set(
+          Object.keys(
+            ((newest?.items ?? {}) as Partial<StubItems>)[section] ?? {},
+          ),
+        );
+        lines[section] = [...acc.values()]
+          .map((l) => ({ ...l, current: onNewest.has(l.name) }))
+          // current lines first, then whatever was used most often
+          .sort(
+            (a, b) =>
+              Number(b.current) - Number(a.current) ||
+              b.lastSeen.localeCompare(a.lastSeen) ||
+              b.seen - a.seen,
+          );
+      }
+
+      return {
+        employerId: e.id,
+        slug: e.slug,
+        name: e.name,
+        isActive: e.isActive,
+        lines,
+        last: newest
+          ? {
+              paymentDate: newest.paymentDate,
+              payBeginDate: newest.payBeginDate,
+              payEndDate: newest.payEndDate,
+              annualSalary:
+                newest.annualSalary === null ? null : Number(newest.annualSalary),
+              netPay: Number(newest.netPay),
+            }
+          : undefined,
+      };
+    })
+    // active employers first; you enter stubs for the job you have
+    .sort(
+      (a, b) =>
+        Number(b.isActive) - Number(a.isActive) ||
+        (b.last?.paymentDate ?? "").localeCompare(a.last?.paymentDate ?? ""),
+    );
 }
 
 export async function loadIncome() {

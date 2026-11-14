@@ -1,5 +1,6 @@
 import {
   loadIncome,
+  loadPaycheckCatalog,
   incomeByYear,
   plannerFor,
   salaryTimeline,
@@ -7,12 +8,15 @@ import {
 import { dateLabel, money, pct } from "@/lib/format";
 import { Card, PageHeader, StatTile } from "@/components/ui";
 import { MonthlyBarChart, TimeSeriesChart } from "@/components/charts";
-import { addPaycheck } from "@/app/actions";
+import { PaycheckForm } from "@/components/paycheck-form";
 
 export const dynamic = "force-dynamic";
 
 export default async function IncomePage() {
-  const { employers, paychecks, limits } = await loadIncome();
+  const [{ employers, paychecks, limits }, catalog] = await Promise.all([
+    loadIncome(),
+    loadPaycheckCatalog(),
+  ]);
   const years = incomeByYear(paychecks);
   const salary = salaryTimeline(paychecks, employers);
   const planner = plannerFor(paychecks, limits, new Date());
@@ -138,56 +142,10 @@ export default async function IncomePage() {
       </div>
 
       <Card
-        title="Add paycheck"
-        subtitle="Quick entry — totals only; full line items live in the stub"
+        title="Add pay stub"
+        subtitle="Every line on the stub — income, pre-tax, taxes, post-tax — prefilled from your last one"
       >
-        <form
-          action={addPaycheck}
-          className="grid grid-cols-2 gap-3 text-xs text-ink-2 sm:grid-cols-4"
-        >
-          <label className="block">
-            Employer
-            <select
-              name="employerId"
-              defaultValue={activeEmployer?.id}
-              className="mt-1 w-full rounded-lg border border-edge bg-surface px-2 py-1.5 text-sm text-ink"
-            >
-              {employers.map((e) => (
-                <option key={e.id} value={e.id}>
-                  {e.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {[
-            ["paymentDate", "Payment date", "date"],
-            ["annualSalary", "Annual salary", "text"],
-            ["totalIncome", "Gross pay", "text"],
-            ["netPay", "Net pay", "text"],
-            ["federalTax", "Federal tax", "text"],
-            ["totalTaxes", "Total taxes", "text"],
-            ["retirement401k", "401(k)", "text"],
-            ["hsa", "HSA", "text"],
-            ["bonus", "Bonus", "text"],
-          ].map(([name, label, type]) => (
-            <label key={name} className="block">
-              {label}
-              <input
-                type={type}
-                inputMode={type === "text" ? "decimal" : undefined}
-                name={name}
-                required={name === "paymentDate" || name === "totalIncome" || name === "netPay"}
-                placeholder={type === "text" ? "0" : undefined}
-                className="mt-1 w-full rounded-lg border border-edge bg-surface px-2 py-1.5 text-sm tabular-nums text-ink"
-              />
-            </label>
-          ))}
-          <div className="col-span-2 flex items-end sm:col-span-4">
-            <button className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white">
-              Save paycheck
-            </button>
-          </div>
-        </form>
+        <PaycheckForm catalog={catalog} />
       </Card>
 
       <Card title="Recent paychecks" subtitle="Most recent first">
